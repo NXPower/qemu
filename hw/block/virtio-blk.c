@@ -947,7 +947,7 @@ static Property virtio_blk_properties[] = {
     DEFINE_PROP_BIT("scsi", VirtIOBlock, conf.scsi, 0, false),
 #endif
     DEFINE_PROP_BIT("request-merging", VirtIOBlock, conf.request_merging, 0,
-                    true),
+                    false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
