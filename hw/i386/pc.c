@@ -1394,6 +1394,11 @@ void pc_memory_init(PCMachineState *pcms,
 
     if (linux_boot) {
         load_linux(pcms, fw_cfg);
+    } else {
+        /* Option ROM to load when all other boot options fail. */
+        option_rom[nb_option_roms].name = "bootfail.bin";
+        option_rom[nb_option_roms].bootindex = 0xfffffff;
+        nb_option_roms++;
     }
 
     for (i = 0; i < nb_option_roms; i++) {
