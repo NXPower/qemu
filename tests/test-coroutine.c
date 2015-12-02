@@ -13,6 +13,9 @@
 
 #include "qemu/osdep.h"
 #include <glib.h>
+#include <alloca.h>
+#include <fcntl.h>
+#include <pthread.h>
 #include "qemu/coroutine.h"
 #include "qemu/coroutine_int.h"
 
@@ -230,6 +233,71 @@ static void test_order(void)
         g_assert_cmpint(records[i].state, ==, expected_pos[i].state);
     }
 }
+
+static void recursive_stack_growth(int n, int fd, int stack_size)
+{
+    int ret;
+    void *buf;
+
+    if (n == 0) {
+        return;
+    }
+
+    qemu_coroutine_yield();
+
+    buf = alloca(stack_size);
+    // Do something interesting with buf so gcc doesn't optimize it away.
+    ret = read(fd, buf, stack_size);
+    assert(ret >= 0);
+    recursive_stack_growth(n - 1, fd, stack_size);
+    // Do some more stuff so gcc doesn't convert into tail call.
+    ret = write(fd, buf, stack_size);
+    assert(ret >= 0);
+}
+
+static void coroutine_fn co_stack_growth(void *opaque)
+{
+    int *ret = opaque;
+    int fd = open("/dev/null", O_RDWR); // So read()/write() become no-ops.
+    // Grow stack to close to 1M in roughly 4K chunks.
+    recursive_stack_growth(250, fd, 4000);
+    *ret = 1;
+}
+
+static void *test_stack_growth_thr(void *arg)
+{
+    int ret[2] = {} ;
+    Coroutine *co[2];
+
+    co[0] = qemu_coroutine_create(co_stack_growth);
+    co[1] = qemu_coroutine_create(co_stack_growth);
+
+    while (ret[0] == 0 || ret[1] == 0) {
+        if (ret[0] == 0) {
+            qemu_coroutine_enter(co[0], &ret[0]);
+        }
+        if (ret[1] == 0) {
+            qemu_coroutine_enter(co[1], &ret[1]);
+        }
+    }
+    return NULL;
+}
+
+static void test_stack_growth(void)
+{
+    const int num_threads = 4;
+    pthread_t thr[num_threads];
+    int i;
+
+    for (i = 0; i < num_threads; i++) {
+        pthread_create(&thr[i], NULL, test_stack_growth_thr, NULL);
+    }
+
+    for (i = 0; i < num_threads; i++) {
+        pthread_join(thr[i], NULL);
+    }
+}
+
 /*
  * Lifecycle benchmark
  */
@@ -377,6 +445,7 @@ int main(int argc, char **argv)
     g_test_add_func("/basic/self", test_self);
     g_test_add_func("/basic/in_coroutine", test_in_coroutine);
     g_test_add_func("/basic/order", test_order);
+    g_test_add_func("/basic/stack_growth", test_stack_growth);
     if (g_test_perf()) {
         g_test_add_func("/perf/lifecycle", perf_lifecycle);
         g_test_add_func("/perf/nesting", perf_nesting);

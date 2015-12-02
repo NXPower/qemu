@@ -22,6 +22,15 @@
 #ifdef _FORTIFY_SOURCE
 #undef _FORTIFY_SOURCE
 #endif
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <setjmp.h>
+#include <stdint.h>
+#include <pthread.h>
+#include <signal.h>
 #include "qemu/osdep.h"
 #include <ucontext.h>
 #include "qemu-common.h"
@@ -30,6 +39,9 @@
 #ifdef CONFIG_VALGRIND_H
 #include <valgrind/valgrind.h>
 #endif
+
+#define INITIAL_STACK_SIZE (1 << 12)
+#define MAX_STACK_SIZE (1 << 20)
 
 typedef struct {
     Coroutine base;
@@ -40,6 +52,7 @@ typedef struct {
     unsigned int valgrind_stack_id;
 #endif
 
+    size_t allocated_stack_size;
 } CoroutineUContext;
 
 /**
@@ -51,9 +64,22 @@ typedef struct {
 
     /** The default coroutine */
     CoroutineUContext leader;
+
+    stack_t signal_stack;
 } CoroutineThreadState;
 
 static pthread_key_t thread_state_key;
+
+/**
+ * Global coroutine bookkeeping
+ */
+typedef struct {
+    int refcount;
+    int zero_fd;
+    struct sigaction old_sigsegv_act;
+} CoroutineGlobalState;
+
+static CoroutineGlobalState global;
 
 /*
  * va_args to makecontext() must be type 'int', so passing
@@ -65,13 +91,111 @@ union cc_arg {
     int i[2];
 };
 
+static void sigsegv_action(int signum, siginfo_t *si, void *uctx)
+{
+    CoroutineThreadState *s = pthread_getspecific(thread_state_key);
+    CoroutineUContext *current;
+    void *p;
+
+#define CHECK(exp) if (!(exp)) abort()
+
+    /* Check that the sigsegv is actually a stack error that we can fix.
+     * Otherwise, abort() the process */
+
+    /* This a thread that runs coroutines */
+    CHECK(s);
+
+    /* This is a memory access (protection) error; the page exists */
+    CHECK(si->si_signo == SIGSEGV);
+    CHECK(si->si_code == SEGV_ACCERR);
+
+    current = DO_UPCAST(CoroutineUContext, base, s->current);
+
+    /* Check that this is not the default coroutine of the thread,
+       which runs on the thread's stack allocated by pthread */
+    CHECK(current != &s->leader);
+
+    /* Now check siginfo to make sure that the fault address is within the
+       address rance allocated for the current coroutine. */
+    CHECK(si->si_addr >= current->stack);
+    p = current->stack + MAX_STACK_SIZE - current->allocated_stack_size;
+    CHECK(si->si_addr < p);
+
+    /* Double the stack from the end */
+    p -= current->allocated_stack_size;
+    CHECK(p >= current->stack);
+    p = mmap(p, current->allocated_stack_size, PROT_READ | PROT_WRITE,
+             MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+    CHECK(p != MAP_FAILED);
+
+#undef CHECK
+
+    /* Success! */
+    current->allocated_stack_size *= 2;
+}
+
+static void coroutine_init_global_state(CoroutineGlobalState *s)
+{
+    struct sigaction sa;
+
+    /* Open /dev/zero for mmap for the purpose of reserving virtual
+       address space for each coroutine stack */
+    s->zero_fd = open("/dev/zero", O_RDONLY);
+    if (s->zero_fd == -1) {
+        abort();
+    }
+
+    /* Arm SIGSEGV handler */
+    sa.sa_sigaction = sigsegv_action;
+    sa.sa_flags = SA_ONSTACK | SA_SIGINFO;
+    sigfillset(&sa.sa_mask);
+
+    if (sigaction(SIGSEGV, &sa, &s->old_sigsegv_act) == -1) {
+        abort();
+    }
+}
+
+static void coroutine_cleanup_global_state(CoroutineGlobalState *s)
+{
+    if (sigaction(SIGSEGV, &s->old_sigsegv_act, NULL) == -1) {
+        abort();
+    }
+
+    close(s->zero_fd);
+}
+
 static CoroutineThreadState *coroutine_get_thread_state(void)
 {
     CoroutineThreadState *s = pthread_getspecific(thread_state_key);
 
     if (!s) {
+        if (__sync_fetch_and_add(&global.refcount, 1) == 0) {
+            coroutine_init_global_state(&global);
+        }
+
         s = g_malloc0(sizeof(*s));
         s->current = &s->leader.base;
+
+        /* Allocate an alternate stack for handling SIGSEGV, if necessary. */
+        if (sigaltstack(NULL, &s->signal_stack) == -1) {
+            abort();
+        }
+        if (s->signal_stack.ss_flags == SS_DISABLE) {
+            s->signal_stack.ss_sp = mmap(NULL, SIGSTKSZ, PROT_READ | PROT_WRITE,
+                                         MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+            if (s->signal_stack.ss_sp == MAP_FAILED) {
+                abort();
+            }
+            s->signal_stack.ss_flags = 0;
+            s->signal_stack.ss_size = SIGSTKSZ;
+
+            if (sigaltstack(&s->signal_stack, NULL) == -1) {
+                abort();
+            }
+        } else {
+            s->signal_stack.ss_sp = NULL;
+        }
+
         pthread_setspecific(thread_state_key, s);
     }
     return s;
@@ -81,7 +205,19 @@ static void qemu_coroutine_thread_cleanup(void *opaque)
 {
     CoroutineThreadState *s = opaque;
 
+    if (s->signal_stack.ss_sp) {
+        s->signal_stack.ss_flags = SS_DISABLE;
+        if (sigaltstack(&s->signal_stack, NULL) == -1) {
+            abort();
+        }
+        munmap(s->signal_stack.ss_sp, s->signal_stack.ss_size);
+    }
+
     g_free(s);
+
+    if (__sync_sub_and_fetch(&global.refcount, 1) == 0) {
+        coroutine_cleanup_global_state(&global);
+    }
 }
 
 static void __attribute__((constructor)) coroutine_init(void)
@@ -110,20 +246,35 @@ static void coroutine_trampoline(int i0, int i1)
     if (!sigsetjmp(self->env, 0)) {
         siglongjmp(*(sigjmp_buf *)co->entry_arg, 1);
     }
+    coroutine_get_thread_state()->current = co;
 
     while (true) {
         co->entry(co->entry_arg);
+        /* Deallocate excess stack when coroutine terminates. */
+        if (self->allocated_stack_size > INITIAL_STACK_SIZE) {
+            self->allocated_stack_size = INITIAL_STACK_SIZE;
+            self->stack = mmap(self->stack, MAX_STACK_SIZE - INITIAL_STACK_SIZE,
+                               PROT_READ, MAP_SHARED | MAP_FIXED,
+                               global.zero_fd, 0);
+            if (self->stack == MAP_FAILED) {
+                abort();
+            }
+        }
         qemu_coroutine_switch(co, co->caller, COROUTINE_TERMINATE);
     }
 }
 
 Coroutine *qemu_coroutine_new(void)
 {
-    const size_t stack_size = 1 << 20;
+    const size_t stack_size = MAX_STACK_SIZE;
     CoroutineUContext *co;
     ucontext_t old_uc, uc;
     sigjmp_buf old_env;
     union cc_arg arg = {0};
+    void *p;
+
+    /* Ensures that the thread state has been initialized */
+    coroutine_get_thread_state();
 
     /* The ucontext functions preserve signal masks which incurs a
      * system call overhead.  sigsetjmp(buf, 0)/siglongjmp() does not
@@ -138,7 +289,24 @@ Coroutine *qemu_coroutine_new(void)
     }
 
     co = g_malloc0(sizeof(*co));
-    co->stack = g_malloc(stack_size);
+
+    /* mmap in stack in 2 steps: map in /dev/zero for the max stack size
+     * to reserve the virtual address space, then map in actual memory
+     * for only the initial stack allocation
+     */
+    co->stack = mmap(NULL, stack_size, PROT_READ, MAP_SHARED,
+                     global.zero_fd, 0);
+    if (co->stack == MAP_FAILED) {
+        abort();
+    }
+    co->allocated_stack_size = INITIAL_STACK_SIZE;
+    p = co->stack + stack_size - co->allocated_stack_size;
+    p = mmap(p, co->allocated_stack_size, PROT_READ | PROT_WRITE,
+             MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+    if (p == MAP_FAILED) {
+        abort();
+    }
+
     co->base.entry_arg = &old_env; /* stash away our jmp_buf */
 
     uc.uc_link = &old_uc;
@@ -186,7 +354,7 @@ void qemu_coroutine_delete(Coroutine *co_)
     valgrind_stack_deregister(co);
 #endif
 
-    g_free(co->stack);
+    munmap(co->stack, MAX_STACK_SIZE);
     g_free(co);
 }
 
@@ -195,15 +363,14 @@ CoroutineAction qemu_coroutine_switch(Coroutine *from_, Coroutine *to_,
 {
     CoroutineUContext *from = DO_UPCAST(CoroutineUContext, base, from_);
     CoroutineUContext *to = DO_UPCAST(CoroutineUContext, base, to_);
-    CoroutineThreadState *s = coroutine_get_thread_state();
     int ret;
-
-    s->current = to_;
 
     ret = sigsetjmp(from->env, 0);
     if (ret == 0) {
         siglongjmp(to->env, action);
     }
+    coroutine_get_thread_state()->current = from_;
+
     return ret;
 }
 

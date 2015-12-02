@@ -21,7 +21,7 @@
 #include "qemu/coroutine_int.h"
 
 enum {
-    POOL_DEFAULT_SIZE = 64,
+    POOL_DEFAULT_SIZE = 1024,
 };
 
 /** Free list to speed up creation */
