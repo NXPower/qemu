@@ -146,6 +146,7 @@ static void test_co_queue(void)
     qemu_coroutine_enter(c1, c2);
     memset(c1, 0xff, sizeof(Coroutine));
     qemu_coroutine_enter(c2, NULL);
+    memset(c1, 0, sizeof(Coroutine));
 }
 
 /*
