@@ -452,6 +452,9 @@ int blk_attach_dev(BlockBackend *blk, void *dev)
     blk_ref(blk);
     blk->dev = dev;
     blk_iostatus_reset(blk);
+
+    /* We're expecting I/O from the device so bump up coroutine pool size */
+    qemu_coroutine_adjust_pool_size(COROUTINE_POOL_RESERVATION);
     return 0;
 }
 
@@ -479,6 +482,7 @@ void blk_detach_dev(BlockBackend *blk, void *dev)
     blk->dev_ops = NULL;
     blk->dev_opaque = NULL;
     blk->guest_block_size = 512;
+    qemu_coroutine_adjust_pool_size(-COROUTINE_POOL_RESERVATION);
     blk_unref(blk);
 }
 

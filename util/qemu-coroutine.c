@@ -21,54 +21,27 @@
 #include "qemu/coroutine_int.h"
 
 enum {
-    POOL_BATCH_SIZE = 64,
+    POOL_DEFAULT_SIZE = 64,
 };
 
 /** Free list to speed up creation */
-static QSLIST_HEAD(, Coroutine) release_pool = QSLIST_HEAD_INITIALIZER(pool);
-static unsigned int release_pool_size;
-static __thread QSLIST_HEAD(, Coroutine) alloc_pool = QSLIST_HEAD_INITIALIZER(pool);
-static __thread unsigned int alloc_pool_size;
-static __thread Notifier coroutine_pool_cleanup_notifier;
-
-static void coroutine_pool_cleanup(Notifier *n, void *value)
-{
-    Coroutine *co;
-    Coroutine *tmp;
-
-    QSLIST_FOREACH_SAFE(co, &alloc_pool, pool_next, tmp) {
-        QSLIST_REMOVE_HEAD(&alloc_pool, pool_next);
-        qemu_coroutine_delete(co);
-    }
-}
+static QemuMutex pool_lock;
+static QSLIST_HEAD(, Coroutine) pool = QSLIST_HEAD_INITIALIZER(pool);
+static unsigned int pool_size;
+static unsigned int pool_max_size = POOL_DEFAULT_SIZE;
 
 Coroutine *qemu_coroutine_create(CoroutineEntry *entry)
 {
     Coroutine *co = NULL;
 
     if (CONFIG_COROUTINE_POOL) {
-        co = QSLIST_FIRST(&alloc_pool);
-        if (!co) {
-            if (release_pool_size > POOL_BATCH_SIZE) {
-                /* Slow path; a good place to register the destructor, too.  */
-                if (!coroutine_pool_cleanup_notifier.notify) {
-                    coroutine_pool_cleanup_notifier.notify = coroutine_pool_cleanup;
-                    qemu_thread_atexit_add(&coroutine_pool_cleanup_notifier);
-                }
-
-                /* This is not exact; there could be a little skew between
-                 * release_pool_size and the actual size of release_pool.  But
-                 * it is just a heuristic, it does not need to be perfect.
-                 */
-                alloc_pool_size = atomic_xchg(&release_pool_size, 0);
-                QSLIST_MOVE_ATOMIC(&alloc_pool, &release_pool);
-                co = QSLIST_FIRST(&alloc_pool);
-            }
-        }
+        qemu_mutex_lock(&pool_lock);
+        co = QSLIST_FIRST(&pool);
         if (co) {
-            QSLIST_REMOVE_HEAD(&alloc_pool, pool_next);
-            alloc_pool_size--;
+            QSLIST_REMOVE_HEAD(&pool, pool_next);
+            pool_size--;
         }
+        qemu_mutex_unlock(&pool_lock);
     }
 
     if (!co) {
@@ -82,22 +55,37 @@ Coroutine *qemu_coroutine_create(CoroutineEntry *entry)
 
 static void coroutine_delete(Coroutine *co)
 {
-    co->caller = NULL;
-
     if (CONFIG_COROUTINE_POOL) {
-        if (release_pool_size < POOL_BATCH_SIZE * 2) {
-            QSLIST_INSERT_HEAD_ATOMIC(&release_pool, co, pool_next);
-            atomic_inc(&release_pool_size);
+        qemu_mutex_lock(&pool_lock);
+        if (pool_size < pool_max_size) {
+            QSLIST_INSERT_HEAD(&pool, co, pool_next);
+            co->caller = NULL;
+            pool_size++;
+            qemu_mutex_unlock(&pool_lock);
             return;
         }
-        if (alloc_pool_size < POOL_BATCH_SIZE) {
-            QSLIST_INSERT_HEAD(&alloc_pool, co, pool_next);
-            alloc_pool_size++;
-            return;
-        }
+        qemu_mutex_unlock(&pool_lock);
     }
 
     qemu_coroutine_delete(co);
+}
+
+static void __attribute__((constructor)) coroutine_pool_init(void)
+{
+    qemu_mutex_init(&pool_lock);
+}
+
+static void __attribute__((destructor)) coroutine_pool_cleanup(void)
+{
+    Coroutine *co;
+    Coroutine *tmp;
+
+    QSLIST_FOREACH_SAFE(co, &pool, pool_next, tmp) {
+        QSLIST_REMOVE_HEAD(&pool, pool_next);
+        qemu_coroutine_delete(co);
+    }
+
+    qemu_mutex_destroy(&pool_lock);
 }
 
 void qemu_coroutine_enter(Coroutine *co, void *opaque)
@@ -144,4 +132,24 @@ void coroutine_fn qemu_coroutine_yield(void)
 
     self->caller = NULL;
     qemu_coroutine_switch(self, to, COROUTINE_YIELD);
+}
+
+void qemu_coroutine_adjust_pool_size(int n)
+{
+    qemu_mutex_lock(&pool_lock);
+
+    pool_max_size += n;
+
+    /* Callers should never take away more than they added */
+    assert(pool_max_size >= POOL_DEFAULT_SIZE);
+
+    /* Trim oversized pool down to new max */
+    while (pool_size > pool_max_size) {
+        Coroutine *co = QSLIST_FIRST(&pool);
+        QSLIST_REMOVE_HEAD(&pool, pool_next);
+        pool_size--;
+        qemu_coroutine_delete(co);
+    }
+
+    qemu_mutex_unlock(&pool_lock);
 }
