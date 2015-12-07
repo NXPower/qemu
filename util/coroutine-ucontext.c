@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <setjmp.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <pthread.h>
 #include <signal.h>
 #include "qemu/osdep.h"
@@ -73,8 +74,22 @@ static pthread_key_t thread_state_key;
 /**
  * Global coroutine bookkeeping
  */
+typedef int TItype __attribute__ ((mode (TI)));
+
 typedef struct {
-    int refcount;
+    /** Actual stack size that we need to grow. */
+    size_t size;
+    char  *pc;
+} max_stack_t;
+
+typedef union {
+    max_stack_t stack;
+    TItype      m_128;
+} max_stack_ut;
+
+typedef struct {
+    max_stack_ut max_stack;
+    int segfault_count;
     int zero_fd;
     struct sigaction old_sigsegv_act;
 } CoroutineGlobalState;
@@ -90,6 +105,27 @@ union cc_arg {
     void *p;
     int i[2];
 };
+
+static void try_update_max_stack(size_t size, void *uctx)
+{
+    ucontext_t *u = (ucontext_t *)uctx;
+#if defined(__x86_64__)
+    char *pc = (char *)u->uc_mcontext.gregs[REG_RIP];
+#else
+    char *pc = NULL;
+#endif
+
+    max_stack_ut newval;
+    max_stack_ut oldval = global.max_stack;
+
+    newval.stack.size = size;
+    newval.stack.pc = pc;
+    
+    while (oldval.stack.size < newval.stack.size) {
+        oldval.m_128 = __sync_val_compare_and_swap(&global.max_stack.m_128,
+                                                   oldval.m_128, newval.m_128);
+    }
+}
 
 static void sigsegv_action(int signum, siginfo_t *si, void *uctx)
 {
@@ -132,6 +168,10 @@ static void sigsegv_action(int signum, siginfo_t *si, void *uctx)
 
     /* Success! */
     current->allocated_stack_size *= 2;
+
+    /* Update global max stack */
+    try_update_max_stack(current->stack + MAX_STACK_SIZE - si->si_addr, uctx);
+    __sync_fetch_and_add(&global.segfault_count, 1);
 }
 
 static void coroutine_init_global_state(CoroutineGlobalState *s)
@@ -153,6 +193,8 @@ static void coroutine_init_global_state(CoroutineGlobalState *s)
     if (sigaction(SIGSEGV, &sa, &s->old_sigsegv_act) == -1) {
         abort();
     }
+
+    s->max_stack.stack.size = INITIAL_STACK_SIZE;
 }
 
 static void coroutine_cleanup_global_state(CoroutineGlobalState *s)
@@ -161,6 +203,9 @@ static void coroutine_cleanup_global_state(CoroutineGlobalState *s)
         abort();
     }
 
+    fprintf(stderr, "Max coroutine stack size: %d bytes Segfault PC %p "
+            "Segfault count %d\n", (int)s->max_stack.stack.size,
+            s->max_stack.stack.pc, s->segfault_count);
     close(s->zero_fd);
 }
 
@@ -169,10 +214,6 @@ static CoroutineThreadState *coroutine_get_thread_state(void)
     CoroutineThreadState *s = pthread_getspecific(thread_state_key);
 
     if (!s) {
-        if (__sync_fetch_and_add(&global.refcount, 1) == 0) {
-            coroutine_init_global_state(&global);
-        }
-
         s = g_malloc0(sizeof(*s));
         s->current = &s->leader.base;
 
@@ -215,9 +256,6 @@ static void qemu_coroutine_thread_cleanup(void *opaque)
 
     g_free(s);
 
-    if (__sync_sub_and_fetch(&global.refcount, 1) == 0) {
-        coroutine_cleanup_global_state(&global);
-    }
 }
 
 static void __attribute__((constructor)) coroutine_init(void)
@@ -229,6 +267,13 @@ static void __attribute__((constructor)) coroutine_init(void)
         fprintf(stderr, "unable to create leader key: %s\n", strerror(errno));
         abort();
     }
+    
+    coroutine_init_global_state(&global);
+}
+
+static void __attribute__((destructor)) coroutine_cleanup(void)
+{
+    coroutine_cleanup_global_state(&global);
 }
 
 static void coroutine_trampoline(int i0, int i1)

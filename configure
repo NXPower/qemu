@@ -1615,6 +1615,12 @@ EOF
 fi
 
 #########################################
+# __sync_val_compare_and_swap() 128 bit requires mcx16 flag.
+if test "$cpu" = x86_64; then
+  QEMU_CFLAGS="-mcx16 $QEMU_CFLAGS"
+fi
+
+#########################################
 # Solaris specific configure tool chain decisions
 
 if test "$solaris" = "yes" ; then
