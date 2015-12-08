@@ -16,6 +16,8 @@
 #include "qemu/notify.h"
 #include "trace.h"
 
+#define QEMU_THREAD_STACK_SIZE (128 * 1024 + PTHREAD_STACK_MIN)
+
 static bool name_threads;
 
 void qemu_thread_naming(bool enable)
@@ -506,15 +508,19 @@ static void *qemu_thread_start(void *args)
 #endif
 
 
-void qemu_thread_create(QemuThread *thread, const char *name,
-                       void *(*start_routine)(void*),
-                       void *arg, int mode)
+void qemu_thread_create_ex(QemuThread *thread, const char *name,
+                           void *(*start_routine)(void*),
+                           void *arg, int mode, size_t stacksize)
 {
     sigset_t set, oldset;
     int err;
     pthread_attr_t attr;
 
     err = pthread_attr_init(&attr);
+    if (err) {
+        error_exit(err, __func__);
+    }
+    err = pthread_attr_setstacksize(&attr, stacksize);
     if (err) {
         error_exit(err, __func__);
     }
@@ -551,6 +557,15 @@ void qemu_thread_create(QemuThread *thread, const char *name,
 
     pthread_attr_destroy(&attr);
 }
+
+void qemu_thread_create(QemuThread *thread, const char *name,
+                        void *(*start_routine)(void*),
+                        void *arg, int mode)
+{
+    return qemu_thread_create_ex(thread, name, start_routine, arg, mode,
+                                 QEMU_THREAD_STACK_SIZE);
+}
+
 
 void qemu_thread_get_self(QemuThread *thread)
 {
