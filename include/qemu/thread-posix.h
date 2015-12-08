@@ -33,4 +33,7 @@ struct QemuThread {
     pthread_t thread;
 };
 
+void qemu_thread_create_ex(QemuThread *thread, const char *name,
+                           void *(*start_routine)(void*),
+                           void *arg, int mode, size_t stacksize);
 #endif

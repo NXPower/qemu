@@ -19,6 +19,8 @@
 #include "qemu/atomic.h"
 #include "qemu/notify.h"
 
+#define QEMU_THREAD_STACK_SIZE (128UL << 10)
+
 static bool name_threads;
 
 void qemu_thread_naming(bool enable)
@@ -446,9 +448,9 @@ static void qemu_thread_set_name(QemuThread *thread, const char *name)
 #endif
 }
 
-void qemu_thread_create(QemuThread *thread, const char *name,
-                       void *(*start_routine)(void*),
-                       void *arg, int mode)
+void qemu_thread_create_ex(QemuThread *thread, const char *name,
+                           void *(*start_routine)(void*),
+                           void *arg, int mode, size_t stacksize)
 {
     sigset_t set, oldset;
     int err;
@@ -463,6 +465,10 @@ void qemu_thread_create(QemuThread *thread, const char *name,
         if (err) {
             error_exit(err, __func__);
         }
+    }
+    err = pthread_attr_setstacksize(&attr, stacksize);
+    if (err) {
+        error_exit(err, __func__);
     }
 
     /* Leave signal handling to the iothread.  */
@@ -480,6 +486,15 @@ void qemu_thread_create(QemuThread *thread, const char *name,
 
     pthread_attr_destroy(&attr);
 }
+
+void qemu_thread_create(QemuThread *thread, const char *name,
+                        void *(*start_routine)(void*),
+                        void *arg, int mode)
+{
+    return qemu_thread_create_ex(thread, name, start_routine, arg, mode,
+                                 QEMU_THREAD_STACK_SIZE);
+}
+
 
 void qemu_thread_get_self(QemuThread *thread)
 {
