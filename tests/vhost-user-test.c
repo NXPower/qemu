@@ -25,6 +25,7 @@
 #include <linux/virtio_net.h>
 #include <sys/vfs.h>
 #include <qemu/sockets.h>
+#include <pthread.h>
 
 /* GLIB version compatibility flags */
 #if !GLIB_CHECK_VERSION(2, 26, 0)
@@ -132,24 +133,23 @@ typedef struct TestServer {
     int fds_num;
     int fds[VHOST_MEMORY_MAX_NREGIONS];
     VhostUserMemory memory;
-    GMutex data_mutex;
-    GCond data_cond;
+    pthread_mutex_t data_mutex;
+    pthread_cond_t  data_cond;
     int log_fd;
     uint64_t rings;
 } TestServer;
 
-#if !GLIB_CHECK_VERSION(2, 32, 0)
-static gboolean g_cond_wait_until(CompatGCond cond, CompatGMutex mutex,
-                                  gint64 end_time)
+static gboolean pthread_cond_wait_until(pthread_cond_t *cond,
+                                        pthread_mutex_t *mutex,
+                                        gint64 end_time)
 {
-    gboolean ret = FALSE;
-    end_time -= g_get_monotonic_time();
-    GTimeVal time = { end_time / G_TIME_SPAN_SECOND,
-                      end_time % G_TIME_SPAN_SECOND };
-    ret = g_cond_timed_wait(cond, mutex, &time);
-    return ret;
+    int ret;
+    struct timespec time = { end_time / G_TIME_SPAN_SECOND,
+                             (end_time % G_TIME_SPAN_SECOND) * 1000 };
+
+    ret = pthread_cond_timedwait(cond, mutex, &time);
+    return ret == 0;
 }
-#endif
 
 static const char *tmpfs;
 static const char *root;
@@ -182,11 +182,11 @@ static void wait_for_fds(TestServer *s)
 {
     gint64 end_time;
 
-    g_mutex_lock(&s->data_mutex);
+    pthread_mutex_lock(&s->data_mutex);
 
     end_time = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
     while (!s->fds_num) {
-        if (!g_cond_wait_until(&s->data_cond, &s->data_mutex, end_time)) {
+        if (!pthread_cond_wait_until(&s->data_cond, &s->data_mutex, end_time)) {
             /* timeout has passed */
             g_assert(s->fds_num);
             break;
@@ -197,7 +197,7 @@ static void wait_for_fds(TestServer *s)
     g_assert_cmpint(s->fds_num, >, 0);
     g_assert_cmpint(s->fds_num, ==, s->memory.nregions);
 
-    g_mutex_unlock(&s->data_mutex);
+    pthread_mutex_unlock(&s->data_mutex);
 }
 
 static void read_guest_mem(const void *data)
@@ -209,7 +209,7 @@ static void read_guest_mem(const void *data)
 
     wait_for_fds(s);
 
-    g_mutex_lock(&s->data_mutex);
+    pthread_mutex_lock(&s->data_mutex);
 
     /* iterate all regions */
     for (i = 0; i < s->fds_num; i++) {
@@ -240,7 +240,7 @@ static void read_guest_mem(const void *data)
         munmap(guest_mem, s->memory.regions[i].memory_size);
     }
 
-    g_mutex_unlock(&s->data_mutex);
+    pthread_mutex_unlock(&s->data_mutex);
 }
 
 static void *thread_function(void *data)
@@ -268,7 +268,7 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
         return;
     }
 
-    g_mutex_lock(&s->data_mutex);
+    pthread_mutex_lock(&s->data_mutex);
     memcpy(p, buf, VHOST_USER_HDR_SIZE);
 
     if (msg.size) {
@@ -324,7 +324,7 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
         s->fds_num = qemu_chr_fe_get_msgfds(chr, s->fds, G_N_ELEMENTS(s->fds));
 
         /* signal the test that it can continue */
-        g_cond_signal(&s->data_cond);
+        pthread_cond_signal(&s->data_cond);
         break;
 
     case VHOST_USER_SET_VRING_KICK:
@@ -350,7 +350,7 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
         p = (uint8_t *) &msg;
         qemu_chr_fe_write_all(chr, p, VHOST_USER_HDR_SIZE);
 
-        g_cond_signal(&s->data_cond);
+        pthread_cond_signal(&s->data_cond);
         break;
 
     case VHOST_USER_SET_VRING_BASE:
@@ -362,7 +362,7 @@ static void chr_read(void *opaque, const uint8_t *buf, int size)
         break;
     }
 
-    g_mutex_unlock(&s->data_mutex);
+    pthread_mutex_unlock(&s->data_mutex);
 }
 
 static const char *init_hugepagefs(const char *path)
@@ -395,13 +395,18 @@ static const char *init_hugepagefs(const char *path)
 static TestServer *test_server_new(const gchar *name)
 {
     TestServer *server = g_new0(TestServer, 1);
+    pthread_condattr_t condattr;
 
     server->socket_path = g_strdup_printf("%s/%s.sock", tmpfs, name);
     server->mig_path = g_strdup_printf("%s/%s.mig", tmpfs, name);
     server->chr_name = g_strdup_printf("chr-%s", name);
 
-    g_mutex_init(&server->data_mutex);
-    g_cond_init(&server->data_cond);
+    pthread_mutex_init(&server->data_mutex, NULL);
+
+    pthread_condattr_init(&condattr);
+    pthread_condattr_setclock(&condattr, CLOCK_MONOTONIC);
+    pthread_cond_init(&server->data_cond, &condattr);
+    pthread_condattr_destroy(&condattr);
 
     server->log_fd = -1;
 
@@ -472,17 +477,17 @@ static void wait_for_log_fd(TestServer *s)
 {
     gint64 end_time;
 
-    g_mutex_lock(&s->data_mutex);
+    pthread_mutex_lock(&s->data_mutex);
     end_time = g_get_monotonic_time() + 5 * G_TIME_SPAN_SECOND;
     while (s->log_fd == -1) {
-        if (!g_cond_wait_until(&s->data_cond, &s->data_mutex, end_time)) {
+        if (!pthread_cond_wait_until(&s->data_cond, &s->data_mutex, end_time)) {
             /* timeout has passed */
             g_assert(s->log_fd != -1);
             break;
         }
     }
 
-    g_mutex_unlock(&s->data_mutex);
+    pthread_mutex_unlock(&s->data_mutex);
 }
 
 static void write_guest_mem(TestServer *s, uint32_t seed)
