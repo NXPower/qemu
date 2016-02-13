@@ -203,9 +203,11 @@ static void coroutine_cleanup_global_state(CoroutineGlobalState *s)
         abort();
     }
 
-    fprintf(stderr, "Max coroutine stack size: %d bytes Segfault PC %p "
-            "Segfault count %d\n", (int)s->max_stack.stack.size,
-            s->max_stack.stack.pc, s->segfault_count);
+    if (s->segfault_count > 0) {
+        fprintf(stderr, "Max coroutine stack size: %ld bytes Segfault PC %p "
+                "Segfault count %d\n", s->max_stack.stack.size,
+                s->max_stack.stack.pc, s->segfault_count);
+    }
     close(s->zero_fd);
 }
 
