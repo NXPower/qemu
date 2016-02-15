@@ -214,6 +214,7 @@ static void coroutine_cleanup_global_state(CoroutineGlobalState *s)
 static CoroutineThreadState *coroutine_get_thread_state(void)
 {
     CoroutineThreadState *s = pthread_getspecific(thread_state_key);
+    sigset_t set;
 
     if (!s) {
         s = g_malloc0(sizeof(*s));
@@ -240,6 +241,11 @@ static CoroutineThreadState *coroutine_get_thread_state(void)
         }
 
         pthread_setspecific(thread_state_key, s);
+
+        // Unmask SIGSEGV
+        sigemptyset(&set);
+        sigaddset(&set, SIGSEGV);
+        pthread_sigmask(SIG_UNBLOCK, &set, NULL);
     }
     return s;
 }
