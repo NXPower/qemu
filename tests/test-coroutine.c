@@ -16,6 +16,7 @@
 #include <alloca.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include "qemu/thread.h"
 #include "qemu/coroutine.h"
 #include "qemu/coroutine_int.h"
 
@@ -248,11 +249,11 @@ static void recursive_stack_growth(int n, int fd, int stack_size)
     buf = alloca(stack_size);
     // Do something interesting with buf so gcc doesn't optimize it away.
     ret = read(fd, buf, stack_size);
-    assert(ret >= 0);
+    g_assert(ret >= 0);
     recursive_stack_growth(n - 1, fd, stack_size);
     // Do some more stuff so gcc doesn't convert into tail call.
     ret = write(fd, buf, stack_size);
-    assert(ret >= 0);
+    g_assert(ret >= 0);
 }
 
 static void coroutine_fn co_stack_growth(void *opaque)
@@ -286,16 +287,49 @@ static void *test_stack_growth_thr(void *arg)
 static void test_stack_growth(void)
 {
     const int num_threads = 4;
-    pthread_t thr[num_threads];
+    QemuThread thr[num_threads];
     int i;
 
     for (i = 0; i < num_threads; i++) {
-        pthread_create(&thr[i], NULL, test_stack_growth_thr, NULL);
+        qemu_thread_create(&thr[i], __func__,
+                           test_stack_growth_thr, NULL, 0);
     }
 
     for (i = 0; i < num_threads; i++) {
-        pthread_join(thr[i], NULL);
+        qemu_thread_join(&thr[i]);
     }
+}
+
+static void *
+test_pthread_sigmask(void *arg)
+{
+    sigset_t set;
+
+    pthread_sigmask(SIG_SETMASK, NULL, &set);
+    g_assert(!sigismember(&set, SIGSEGV));
+
+    return NULL;
+}
+
+static void
+test_sigmask(void)
+{
+    /* Test that sigprocmask() never blocks SIGSEGV */
+    sigset_t set, oldset;
+
+    sigfillset(&set);
+    sigprocmask(SIG_SETMASK, &set, &oldset);
+    sigprocmask(SIG_SETMASK, &oldset, &set);
+
+    g_assert(!sigismember(&set, SIGSEGV));
+
+    /*
+     * Test that new threads created by qemu_thread_create does not
+     * mask SIGSEGV.
+     */
+    QemuThread thr;
+    qemu_thread_create(&thr, __func__, test_pthread_sigmask, NULL, 0);
+    qemu_thread_join(&thr);
 }
 
 /*
@@ -446,6 +480,7 @@ int main(int argc, char **argv)
     g_test_add_func("/basic/in_coroutine", test_in_coroutine);
     g_test_add_func("/basic/order", test_order);
     g_test_add_func("/basic/stack_growth", test_stack_growth);
+    g_test_add_func("/basic/sigmask", test_sigmask);
     if (g_test_perf()) {
         g_test_add_func("/perf/lifecycle", perf_lifecycle);
         g_test_add_func("/perf/nesting", perf_nesting);

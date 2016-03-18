@@ -22,9 +22,14 @@
 #ifdef _FORTIFY_SOURCE
 #undef _FORTIFY_SOURCE
 #endif
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <setjmp.h>
@@ -106,6 +111,38 @@ union cc_arg {
     int i[2];
 };
 
+/*
+ * Pointers to libc functions are resolved in the coroutine_init constructor.
+ * However, coroutine_init is not the first constructor that is invoked, and
+ * other constructors may call malloc() which then calls call sigprocmask().
+ * To workaround this, we initialize these pointers to a nop function until
+ * the libc function pointers are resolved.
+ */
+static int nop_sigmask(int how, const sigset_t *set, sigset_t *oldset)
+{
+    return 0;
+}
+
+#define SIGMASK_WRAPPER(func) \
+static int (*libc_##func)(int, const sigset_t *, sigset_t *) =          \
+    &nop_sigmask;                                                       \
+int func(int how, const sigset_t *set, sigset_t *oldset)                \
+{                                                                       \
+    sigset_t fixed_set;                                                 \
+                                                                        \
+    if (set && sigismember(set, SIGSEGV)) {                             \
+      fixed_set = *set;                                                 \
+      sigdelset(&fixed_set, SIGSEGV);                                   \
+      set = &fixed_set;                                                 \
+    }                                                                   \
+                                                                        \
+    return libc_##func(how, set, oldset);                               \
+}
+
+SIGMASK_WRAPPER(sigprocmask)
+SIGMASK_WRAPPER(pthread_sigmask)
+#undef SIGMASK_WRAPPER
+
 static void try_update_max_stack(size_t size, void *uctx)
 {
     ucontext_t *u = (ucontext_t *)uctx;
@@ -120,7 +157,7 @@ static void try_update_max_stack(size_t size, void *uctx)
 
     newval.stack.size = size;
     newval.stack.pc = pc;
-    
+
     while (oldval.stack.size < newval.stack.size) {
         oldval.m_128 = __sync_val_compare_and_swap(&global.max_stack.m_128,
                                                    oldval.m_128, newval.m_128);
@@ -214,7 +251,6 @@ static void coroutine_cleanup_global_state(CoroutineGlobalState *s)
 static CoroutineThreadState *coroutine_get_thread_state(void)
 {
     CoroutineThreadState *s = pthread_getspecific(thread_state_key);
-    sigset_t set;
 
     if (!s) {
         s = g_malloc0(sizeof(*s));
@@ -241,11 +277,6 @@ static CoroutineThreadState *coroutine_get_thread_state(void)
         }
 
         pthread_setspecific(thread_state_key, s);
-
-        // Unmask SIGSEGV
-        sigemptyset(&set);
-        sigaddset(&set, SIGSEGV);
-        pthread_sigmask(SIG_UNBLOCK, &set, NULL);
     }
     return s;
 }
@@ -275,8 +306,15 @@ static void __attribute__((constructor)) coroutine_init(void)
         fprintf(stderr, "unable to create leader key: %s\n", strerror(errno));
         abort();
     }
-    
+
     coroutine_init_global_state(&global);
+
+#define RESOLVE_LIBC_FUNC(func)                                 \
+    if (!(libc_##func = dlsym(RTLD_NEXT, #func))) abort()
+
+    RESOLVE_LIBC_FUNC(sigprocmask);
+    RESOLVE_LIBC_FUNC(pthread_sigmask);
+#undef RESOLVE_LIBC_FUNC
 }
 
 static void __attribute__((destructor)) coroutine_cleanup(void)
