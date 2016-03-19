@@ -1074,14 +1074,6 @@ extern void igd_passthrough_isa_bridge_create(PCIBus *bus, uint16_t gpu_dev_id);
 		.value = "on",\
 	},\
         { /* PC_RHEL7_1_COMPAT */ \
-            .driver   = "qemu64" "-" TYPE_X86_CPU,\
-            .property = "level",\
-            .value    = stringify(4),\
-        },{ /* PC_RHEL7_1_COMPAT */ \
-            .driver   = "kvm64" "-" TYPE_X86_CPU,\
-            .property = "level",\
-            .value    = stringify(5),\
-        },{ /* PC_RHEL7_1_COMPAT */ \
             .driver   = "pentium3" "-" TYPE_X86_CPU,\
             .property = "level",\
             .value    = stringify(2),\
