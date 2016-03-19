@@ -1156,6 +1156,14 @@ extern void igd_passthrough_isa_bridge_create(PCIBus *bus, uint16_t gpu_dev_id);
  */
 #define PC_RHEL7_0_COMPAT \
         {\
+            .driver   = "qemu64" "-" TYPE_X86_CPU,\
+            .property = "level",\
+            .value    = stringify(4),\
+        },{\
+            .driver   = "kvm64" "-" TYPE_X86_CPU,\
+            .property = "level",\
+            .value    = stringify(5),\
+        },{\
             .driver   = "virtio-scsi-pci",\
             .property = "any_layout",\
             .value    = "off",\
