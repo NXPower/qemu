@@ -1215,6 +1215,14 @@ extern void igd_passthrough_isa_bridge_create(PCIBus *bus, uint16_t gpu_dev_id);
             .driver   = "virtio-net-pci", \
             .property = "ctrl_guest_offloads", \
             .value    = "off", \
+        },{\
+            .driver   = "VGA",\
+            .property = "qemu-extended-regs",\
+            .value    = "off",\
+        },{\
+            .driver   = "secondary-vga",\
+            .property = "qemu-extended-regs",\
+            .value    = "off",\
         },\
 	{\
 		.driver = "Conroe" "-" TYPE_X86_CPU,\
