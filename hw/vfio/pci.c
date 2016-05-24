@@ -335,6 +335,146 @@ static void vfio_intx_disable(VFIOPCIDevice *vdev)
     trace_vfio_intx_disable(vdev->vbasedev.name);
 }
 
+static bool vfio_msix_table_mmap_enabled(VFIOPCIDevice *vdev)
+{
+    VFIORegion *region = &vdev->bars[vdev->msix->table_bar].region;
+
+    return ((region->flags & VFIO_REGION_INFO_FLAG_CAPS) &&
+            region->nr_mmaps && region->size == region->mmaps[0].size &&
+            region->mmaps[0].mmap);
+}
+
+static uint32_t vfio_msix_get_hw_mask(VFIOPCIDevice *vdev, int vector)
+{
+    VFIORegion *region = &vdev->bars[vdev->msix->table_bar].region;
+    unsigned offset = vdev->msix->table_offset + vector * PCI_MSIX_ENTRY_SIZE +
+                      PCI_MSIX_ENTRY_VECTOR_CTRL;
+    uint32_t val;
+
+    if (region->nr_mmaps && region->mmaps[0].mmap) {
+        val = pci_get_long(region->mmaps[0].mmap + offset);
+    } else {
+        val = vfio_region_read(region, offset, 4);
+    }
+
+    return val;
+}
+
+static void vfio_msix_set_hw_mask(VFIOPCIDevice *vdev, int vector, uint32_t val)
+{
+    VFIORegion *region = &vdev->bars[vdev->msix->table_bar].region;
+    unsigned offset = vdev->msix->table_offset + vector * PCI_MSIX_ENTRY_SIZE +
+                      PCI_MSIX_ENTRY_VECTOR_CTRL;
+    uint32_t data;
+
+    if (region->nr_mmaps && region->mmaps[0].mmap) {
+        data = pci_get_long(region->mmaps[0].mmap + offset);
+        data &= ~PCI_MSIX_ENTRY_CTRL_MASKBIT;
+        data |= (val & PCI_MSIX_ENTRY_CTRL_MASKBIT);
+        pci_set_long(region->mmaps[0].mmap + offset, data);
+    } else {
+        data = vfio_region_read(region, offset, 4);
+        data &= ~PCI_MSIX_ENTRY_CTRL_MASKBIT;
+        data |= (val & PCI_MSIX_ENTRY_CTRL_MASKBIT);
+        vfio_region_write(region, offset, data, 4);
+    }
+}
+
+static void vfio_msix_table_mmio_write(void *opaque, hwaddr addr,
+                                  uint64_t val, unsigned size)
+{
+    VFIOPCIDevice *vdev = opaque;
+    int vector = addr / PCI_MSIX_ENTRY_SIZE;
+
+    if (range_covers_byte(addr, size, vector * PCI_MSIX_ENTRY_SIZE +
+                          PCI_MSIX_ENTRY_VECTOR_CTRL)) {
+        int offset = PCI_MSIX_ENTRY_VECTOR_CTRL - addr % PCI_MSIX_ENTRY_SIZE;
+
+        vfio_msix_set_hw_mask(vdev, vector, val >> (offset << 3));
+
+        if (offset) {
+            val &= ((1 << (offset << 3)) - 1);
+            memory_region_dispatch_write(&vdev->pdev.msix_table_mmio, addr,
+                                         val, size, MEMTXATTRS_UNSPECIFIED);
+        }
+    } else {
+        memory_region_dispatch_write(&vdev->pdev.msix_table_mmio, addr,
+                                     val, size, MEMTXATTRS_UNSPECIFIED);
+    }
+}
+
+static uint64_t vfio_msix_table_mmio_read(void *opaque, hwaddr addr,
+                                  unsigned size)
+{
+    VFIOPCIDevice *vdev = opaque;
+    int vector = addr / PCI_MSIX_ENTRY_SIZE;
+    uint64_t data;
+
+    if (range_covers_byte(addr, size, vector * PCI_MSIX_ENTRY_SIZE +
+                          PCI_MSIX_ENTRY_VECTOR_CTRL)) {
+        int offset = PCI_MSIX_ENTRY_VECTOR_CTRL - addr % PCI_MSIX_ENTRY_SIZE;
+
+        data = vfio_msix_get_hw_mask(vdev, vector);
+
+        if (offset) {
+            uint64_t val;
+
+            memory_region_dispatch_read(&vdev->pdev.msix_table_mmio, addr,
+                                        &val, size, MEMTXATTRS_UNSPECIFIED);
+            data &= ~((1 << (offset << 3)) - 1);
+            data += (val & ((1 << (offset << 3)) - 1));
+        }
+    } else {
+        memory_region_dispatch_read(&vdev->pdev.msix_table_mmio,
+                                    addr, &data, size, MEMTXATTRS_UNSPECIFIED);
+    }
+    return data;
+}
+
+static const MemoryRegionOps vfio_msix_table_mmio_ops = {
+    .read = vfio_msix_table_mmio_read,
+    .write = vfio_msix_table_mmio_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+    },
+};
+
+static uint64_t vfio_msix_pba_mmio_read(void *opaque, hwaddr addr,
+                                   unsigned size)
+{
+    VFIOPCIDevice *vdev = opaque;
+    VFIORegion *region = &vdev->bars[vdev->msix->pba_bar].region;
+    unsigned offset = vdev->msix->pba_offset + addr;
+    uint64_t data, hw_data;
+
+    memory_region_dispatch_read(&vdev->pdev.msix_pba_mmio,
+                                addr, &data, size, MEMTXATTRS_UNSPECIFIED);
+   if (region->nr_mmaps && region->mmaps[0].mmap) {
+        hw_data = pci_get_long(region->mmaps[0].mmap + offset);
+    } else {
+        hw_data = vfio_region_read(region, offset, 4);
+    }
+
+    return data | hw_data;
+}
+
+static void vfio_msix_pba_mmio_write(void *opaque, hwaddr addr,
+                                uint64_t val, unsigned size)
+{
+}
+
+static const MemoryRegionOps vfio_msix_pba_mmio_ops = {
+    .read = vfio_msix_pba_mmio_read,
+    .write = vfio_msix_pba_mmio_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+    },
+};
+
 /*
  * MSI/X
  */
@@ -1118,6 +1258,21 @@ void vfio_pci_write_config(PCIDevice *pdev,
 
         is_enabled = msi_enabled(pdev);
 
+        /*
+         * We should also enable MSI-X table mmapping for performance when
+         * device enable MSI instead of MSI-X
+         */
+        if (msix_present(pdev)) {
+            if (vfio_msix_table_mmap_enabled(vdev) &&
+                !vdev->msix->table_mmapped && is_enabled) {
+                memory_region_set_enabled(&vdev->pdev.msix_table_mmio, false);
+                vdev->msix->table_mmapped = true;
+            }
+            if (vdev->msix->table_mmapped && !is_enabled) {
+                memory_region_set_enabled(&vdev->pdev.msix_table_mmio, true);
+                vdev->msix->table_mmapped = false;
+            }
+        }
         if (!was_enabled) {
             if (is_enabled) {
                 vfio_msi_enable(vdev);
@@ -1131,11 +1286,46 @@ void vfio_pci_write_config(PCIDevice *pdev,
         }
     } else if (pdev->cap_present & QEMU_PCI_CAP_MSIX &&
         ranges_overlap(addr, len, pdev->msix_cap, MSIX_CAP_LENGTH)) {
-        int is_enabled, was_enabled = msix_enabled(pdev);
+        int i, is_enabled, was_enabled = msix_enabled(pdev);
+        MSIMessage msg;
+        uint8_t *entry;
 
         pci_default_write_config(pdev, addr, val, len);
 
         is_enabled = msix_enabled(pdev);
+
+        /* We can enable MSI-X table mmapping when everything is done */
+        if (vfio_msix_table_mmap_enabled(vdev) &&
+            !vdev->msix->table_mmapped && !pdev->msix_function_masked) {
+            for (i = 0; i < pdev->msix_entries_nr; i++) {
+                msg = msix_get_message(pdev, i);
+                if (msg.address) {
+                    entry = pdev->msix_table + i * PCI_MSIX_ENTRY_SIZE;
+                    entry[PCI_MSIX_ENTRY_VECTOR_CTRL] &= ~PCI_MSIX_ENTRY_CTRL_MASKBIT;
+                    vfio_msix_vector_use(pdev, i, msg);
+                }
+            }
+            memory_region_set_enabled(&vdev->pdev.msix_table_mmio, false);
+            vdev->msix->table_mmapped = true;
+        }
+
+        /*
+         * We should disable MSI-X table mmapping when MSI-X is disabled
+         * or MASKALL bit is set so that guest could program the emulated
+         * MSI-X table instead of the HW table.
+         */
+        if (vdev->msix->table_mmapped && pdev->msix_function_masked) {
+            if (!is_enabled) {
+                memset(pdev->msix_table, 0,
+                       pdev->msix_entries_nr * PCI_MSIX_ENTRY_SIZE);
+            }
+            for (i = 0; i < pdev->msix_entries_nr; i++) {
+                entry = pdev->msix_table + i * PCI_MSIX_ENTRY_SIZE;
+                entry[PCI_MSIX_ENTRY_VECTOR_CTRL] |= PCI_MSIX_ENTRY_CTRL_MASKBIT;
+            }
+            memory_region_set_enabled(&vdev->pdev.msix_table_mmio, true);
+            vdev->msix->table_mmapped = false;
+        }
 
         if (!was_enabled && is_enabled) {
             vfio_msix_enable(vdev);
@@ -1204,6 +1394,11 @@ static void vfio_pci_fixup_msix_region(VFIOPCIDevice *vdev)
 {
     off_t start, end;
     VFIORegion *region = &vdev->bars[vdev->msix->table_bar].region;
+
+    if ((region->flags & VFIO_REGION_INFO_FLAG_CAPS) &&
+        region->size == region->mmaps[0].size) {
+        return;
+    }
 
     /*
      * We expect to find a single mmap covering the whole BAR, anything else
@@ -1350,13 +1545,16 @@ static int vfio_msix_early_setup(VFIOPCIDevice *vdev)
 static int vfio_msix_setup(VFIOPCIDevice *vdev, int pos)
 {
     int ret;
+    VFIORegion *msix_region = &vdev->bars[vdev->msix->table_bar].region;
+    VFIORegion *pba_region = &vdev->bars[vdev->msix->pba_bar].region;
 
     vdev->msix->pending = g_malloc0(BITS_TO_LONGS(vdev->msix->entries) *
                                     sizeof(unsigned long));
+
     ret = msix_init(&vdev->pdev, vdev->msix->entries,
-                    vdev->bars[vdev->msix->table_bar].region.mem,
+                    msix_region->mem,
                     vdev->msix->table_bar, vdev->msix->table_offset,
-                    vdev->bars[vdev->msix->pba_bar].region.mem,
+                    pba_region->mem,
                     vdev->msix->pba_bar, vdev->msix->pba_offset, pos);
     if (ret < 0) {
         if (ret == -ENOTSUP) {
@@ -1384,6 +1582,29 @@ static int vfio_msix_setup(VFIOPCIDevice *vdev, int pos)
      */
     memory_region_set_enabled(&vdev->pdev.msix_pba_mmio, false);
 
+    if (vfio_msix_table_mmap_enabled(vdev)) {
+        char *name;
+
+        vdev->msix->table_mem = g_new0(MemoryRegion, 1);
+        name = g_strdup_printf("%s msix-mmio",
+                               memory_region_name(msix_region->mem));
+        memory_region_init_io(vdev->msix->table_mem, OBJECT(vdev),
+                              &vfio_msix_table_mmio_ops, vdev, name,
+                              memory_region_size(&vdev->pdev.msix_table_mmio));
+        memory_region_add_subregion(&vdev->pdev.msix_table_mmio, 0,
+                                    vdev->msix->table_mem);
+        g_free(name);
+        vdev->msix->pba_mem = g_new0(MemoryRegion, 1);
+        name = g_strdup_printf("%s pba-mmio",
+                               memory_region_name(pba_region->mem));
+        memory_region_init_io(vdev->msix->pba_mem, OBJECT(vdev),
+                              &vfio_msix_pba_mmio_ops, vdev, name,
+                              memory_region_size(&vdev->pdev.msix_pba_mmio));
+        memory_region_add_subregion(&vdev->pdev.msix_pba_mmio, 0,
+                                    vdev->msix->pba_mem);
+        g_free(name);
+    }
+
     return 0;
 }
 
@@ -1392,6 +1613,19 @@ static void vfio_teardown_msi(VFIOPCIDevice *vdev)
     msi_uninit(&vdev->pdev);
 
     if (vdev->msix) {
+        if (vdev->msix->table_mem) {
+            memory_region_del_subregion(&vdev->pdev.msix_table_mmio,
+                                        vdev->msix->table_mem);
+            object_unparent(OBJECT(vdev->msix->table_mem));
+            g_free(vdev->msix->table_mem);
+        }
+        if (vdev->msix->pba_mem) {
+            memory_region_del_subregion(&vdev->pdev.msix_pba_mmio,
+                                        vdev->msix->pba_mem);
+            object_unparent(OBJECT(vdev->msix->pba_mem));
+            g_free(vdev->msix->pba_mem);
+        }
+
         msix_uninit(&vdev->pdev,
                     vdev->bars[vdev->msix->table_bar].region.mem,
                     vdev->bars[vdev->msix->pba_bar].region.mem);
