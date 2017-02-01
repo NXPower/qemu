@@ -1676,6 +1676,8 @@ int virtio_load(VirtIODevice *vdev, QEMUFile *f, int version_id)
     for (i = 0; i < num; i++) {
         if (vdev->vq[i].vring.desc) {
             uint16_t nheads;
+            unsigned int inuse;
+
             nheads = vring_avail_idx(&vdev->vq[i]) - vdev->vq[i].last_avail_idx;
             /* Check it isn't doing strange things with descriptor numbers. */
             if (nheads > vdev->vq[i].vring.num) {
@@ -1695,10 +1697,19 @@ int virtio_load(VirtIODevice *vdev, QEMUFile *f, int version_id)
              * Since max ring size < UINT16_MAX it's safe to use modulo
              * UINT16_MAX + 1 subtraction.
              */
-            vdev->vq[i].inuse = (uint16_t)(vdev->vq[i].last_avail_idx -
-                                vdev->vq[i].used_idx);
+            inuse = (uint16_t)(vdev->vq[i].last_avail_idx -
+                               vdev->vq[i].used_idx);
+            if (vdev->vq[i].inuse != inuse) {
+                virtio_error(vdev,
+                             "VQ %d inuse 0x%x != last_avail_idx 0x%x - "
+                             "used_idx 0x%x",
+                             i, vdev->vq[i].inuse,
+                             vdev->vq[i].last_avail_idx,
+                             vring_used_idx(&vdev->vq[i]));
+            }
             if (vdev->vq[i].inuse > vdev->vq[i].vring.num) {
-                error_report("VQ %d size 0x%x < last_avail_idx 0x%x - "
+                virtio_error(vdev,
+                             "VQ %d size 0x%x < last_avail_idx 0x%x - "
                              "used_idx 0x%x",
                              i, vdev->vq[i].vring.num,
                              vdev->vq[i].last_avail_idx,
