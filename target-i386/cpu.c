@@ -2500,6 +2500,10 @@ void cpu_x86_cpuid(CPUX86State *env, uint32_t index, uint32_t count,
     case 0x80000002:
     case 0x80000003:
     case 0x80000004:
+        if (kvm_enabled()) {
+            host_cpuid(index, 0, eax, ebx, ecx, edx);
+            break;
+        }
         *eax = env->cpuid_model[(index - 0x80000002) * 4 + 0];
         *ebx = env->cpuid_model[(index - 0x80000002) * 4 + 1];
         *ecx = env->cpuid_model[(index - 0x80000002) * 4 + 2];

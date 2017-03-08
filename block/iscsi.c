@@ -108,6 +108,7 @@ typedef struct IscsiAIOCB {
 #define MAX_NOP_FAILURES 3
 #define ISCSI_CMD_RETRIES ARRAY_SIZE(iscsi_retry_times)
 static const unsigned iscsi_retry_times[] = {8, 32, 128, 512, 2048, 8192, 32768};
+#define ISCSI_CONNECTION_TIMEOUT 45
 
 /* this threshold is a trade-off knob to choose between
  * the potential additional overhead of an extra GET_LBA_STATUS request
@@ -1489,6 +1490,7 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
         ret = -ENOMEM;
         goto out;
     }
+    iscsi_set_connection_timeout(iscsi, ISCSI_CONNECTION_TIMEOUT);
 
     if (iscsi_set_targetname(iscsi, iscsi_url->target)) {
         error_setg(errp, "iSCSI: Failed to set target name.");
@@ -1540,7 +1542,8 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
     }
 #endif
 
-    if (iscsi_full_connect_sync(iscsi, iscsi_url->portal, iscsi_url->lun) != 0) {
+    if (iscsi_full_connect_sync(iscsi, iscsi_url->portal, iscsi_url->lun,
+                                ISCSI_CONNECTION_TIMEOUT) != 0) {
         error_setg(errp, "iSCSI: Failed to connect to LUN : %s",
             iscsi_get_error(iscsi));
         ret = -EINVAL;
