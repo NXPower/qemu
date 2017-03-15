@@ -46,7 +46,7 @@
 #include <valgrind/valgrind.h>
 #endif
 
-#define INITIAL_STACK_SIZE (1 << 12)
+#define INITIAL_STACK_SIZE (getpagesize())
 #define MAX_STACK_SIZE (1 << 20)
 
 typedef struct {
