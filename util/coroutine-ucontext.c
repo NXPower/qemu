@@ -170,10 +170,18 @@ static void sigsegv_action(int signum, siginfo_t *si, void *uctx)
     CoroutineUContext *current;
     void *p;
 
-#define CHECK(exp) if (!(exp)) abort()
+#define CHECK(exp) do {                                               \
+      if (!(exp)) {                                                   \
+        if (sigaction(signum, &global.old_sigsegv_act, NULL) == -1) { \
+          abort();                                                    \
+        }                                                             \
+        return;                                                       \
+      }                                                               \
+    } while (0)
 
     /* Check that the sigsegv is actually a stack error that we can fix.
-     * Otherwise, abort() the process */
+     * Otherwise, unregister the sigsegv handler and fall back to the default.
+     */
 
     /* This a thread that runs coroutines */
     CHECK(s);
