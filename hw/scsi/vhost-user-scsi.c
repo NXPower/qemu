@@ -78,6 +78,30 @@ static int vhost_user_scsi_load(QEMUFile *f, void *opaque, int version_id)
     return virtio_load(vdev, f, version_id);
 }
 
+static inline void vhost_user_scsi_heartbeat_update(VHostUserSCSI *s)
+{
+    timer_mod(s->heartbeat, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) +
+              5000); /* reset timer to 5s from now */
+}
+
+static void vhost_user_scsi_heartbeat_cb(void *opaque)
+{
+    uint64_t features;
+    VHostUserSCSI *s = VHOST_USER_SCSI(opaque);
+    VHostSCSICommon *vsc = VHOST_SCSI_COMMON(s);
+    struct vhost_dev *hdev = &vsc->dev;
+    int err;
+
+    err = hdev->vhost_ops->vhost_get_features(hdev, &features);
+    if (err < 0) {
+        /* vhost socket probably disconnected */
+        printf("Got HUP from Frodo\n");
+        abort();
+    }
+
+    vhost_user_scsi_heartbeat_update(s);
+}
+
 static void vhost_user_scsi_realize(DeviceState *dev, Error **errp)
 {
     VirtIOSCSICommon *vs = VIRTIO_SCSI_COMMON(dev);
@@ -120,6 +144,11 @@ static void vhost_user_scsi_realize(DeviceState *dev, Error **errp)
 
     register_savevm(dev, "vhost-user-scsi", vhost_user_scsi_id++, 1,
                     vhost_user_scsi_save, vhost_user_scsi_load, s);
+
+    /* Register heartbeat timer */
+    s->heartbeat = timer_new_ms(QEMU_CLOCK_REALTIME,
+                                vhost_user_scsi_heartbeat_cb, s);
+    vhost_user_scsi_heartbeat_update(s);
 }
 
 static void vhost_user_scsi_unrealize(DeviceState *dev, Error **errp)
@@ -127,6 +156,11 @@ static void vhost_user_scsi_unrealize(DeviceState *dev, Error **errp)
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
     VHostUserSCSI *s = VHOST_USER_SCSI(dev);
     VHostSCSICommon *vsc = VHOST_SCSI_COMMON(s);
+
+    /* Unregister heartbeat timer */
+    timer_del(s->heartbeat);
+    timer_free(s->heartbeat);
+    s->heartbeat = NULL;
 
     /* This will stop the vhost backend. */
     vhost_user_scsi_set_status(vdev, 0);

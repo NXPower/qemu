@@ -18,6 +18,7 @@
 #define VHOST_USER_SCSI_H
 
 #include "qemu-common.h"
+#include "qemu/timer.h"
 #include "hw/qdev.h"
 #include "hw/virtio/virtio-scsi.h"
 #include "hw/virtio/vhost.h"
@@ -30,6 +31,7 @@
 typedef struct VHostUserSCSI {
     VHostSCSICommon parent_obj;
     uint64_t host_features;
+    QEMUTimer *heartbeat;
 } VHostUserSCSI;
 
 #endif /* VHOST_USER_SCSI_H */
