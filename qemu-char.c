@@ -3723,7 +3723,6 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     bool is_telnet      = qemu_opt_get_bool(opts, "telnet", false);
     bool do_nodelay     = !qemu_opt_get_bool(opts, "delay", true);
     int64_t reconnect   = qemu_opt_get_number(opts, "reconnect", 0);
-    int fd              = qemu_opt_get_number(opts, "fd", -1);
     const char *path = qemu_opt_get(opts, "path");
     const char *host = qemu_opt_get(opts, "host");
     const char *port = qemu_opt_get(opts, "port");
@@ -3731,7 +3730,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     SocketAddress *addr;
     ChardevSocket *sock;
 
-    if (!path && fd == -1) {
+    if (!path) {
         if (!host) {
             error_setg(errp, "chardev: socket: no host given");
             return;
@@ -3763,15 +3762,7 @@ static void qemu_chr_parse_socket(QemuOpts *opts, ChardevBackend *backend,
     sock->tls_creds = g_strdup(tls_creds);
 
     addr = g_new0(SocketAddress, 1);
-    if (fd >= 0) {
-        sock->has_fd = true;
-        sock->fd = fd;
-        sock->server = false;
-        sock->reconnect = reconnect;
-    }
-
-    if (fd >= 0 || path) {
-        /* Assume if we have fd, this is a unix socket */
+    if (path) {
         UnixSocketAddress *q_unix;
         addr->type = SOCKET_ADDRESS_KIND_UNIX;
         q_unix = addr->u.q_unix.data = g_new0(UnixSocketAddress, 1);
@@ -4189,9 +4180,6 @@ QemuOptsList qemu_chardev_opts = {
             .name = "path",
             .type = QEMU_OPT_STRING,
         },{
-            .name = "fd",
-            .type = QEMU_OPT_NUMBER,
-        },{
             .name = "host",
             .type = QEMU_OPT_STRING,
         },{
@@ -4429,7 +4417,6 @@ static CharDriverState *qmp_chardev_open_socket(const char *id,
     bool is_telnet      = sock->has_telnet  ? sock->telnet  : false;
     bool is_waitconnect = sock->has_wait    ? sock->wait    : false;
     int64_t reconnect   = sock->has_reconnect ? sock->reconnect : 0;
-    int fd              = sock->has_fd      ? sock->fd      : -1;
     ChardevCommon *common = qapi_ChardevSocket_base(sock);
     QIOChannelSocket *sioc = NULL;
 
@@ -4514,16 +4501,7 @@ static CharDriverState *qmp_chardev_open_socket(const char *id,
                                          qemu_chr_socket_connected,
                                          chr, NULL);
     } else {
-        if (fd >= 0) {
-            s->ioc = QIO_CHANNEL(qio_channel_socket_new_fd(fd, errp));
-            if (!s->ioc) {
-                goto error;
-            }
-            s->connected = 1;
-            chr->fd_in_tag = io_add_watch_poll(s->ioc,
-                                               tcp_chr_read_poll,
-                                               tcp_chr_read, chr);
-        } else if (s->is_listen) {
+        if (s->is_listen) {
             sioc = qio_channel_socket_new();
             if (qio_channel_socket_listen_sync(sioc, s->addr, errp) < 0) {
                 goto error;

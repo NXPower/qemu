@@ -3255,8 +3255,6 @@
 #          then attempt a reconnect after the given number of seconds.
 #          Setting this to zero disables this function. (default: 0)
 #          (Since: 2.2)
-# @fd: #optional File-descriptor of a preconnected socket. (default: -1)
-#      (Nutanix extension)
 #
 # Since: 1.4
 ##
@@ -3266,8 +3264,7 @@
                                      '*wait'      : 'bool',
                                      '*nodelay'   : 'bool',
                                      '*telnet'    : 'bool',
-                                     '*reconnect' : 'int',
-                                     '*fd'        : 'int' },
+                                     '*reconnect' : 'int' },
   'base': 'ChardevCommon' }
 
 ##
