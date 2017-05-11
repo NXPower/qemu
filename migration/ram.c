@@ -50,8 +50,6 @@
     do { } while (0)
 #endif
 
-static int dirty_rate_high_cnt;
-
 static uint64_t bitmap_sync_count;
 
 /***********************************************************/
@@ -656,10 +654,8 @@ static void migration_bitmap_sync(void)
 
             if (s->dirty_pages_rate &&
                (num_dirty_pages_period * TARGET_PAGE_SIZE >
-                   (bytes_xfer_now - bytes_xfer_prev)/2) &&
-               (dirty_rate_high_cnt++ >= 2)) {
+                   (bytes_xfer_now - bytes_xfer_prev)/2)) {
                     trace_migration_throttle();
-                    dirty_rate_high_cnt = 0;
                     mig_throttle_guest_down();
              }
              bytes_xfer_prev = bytes_xfer_now;
@@ -1891,7 +1887,6 @@ static int ram_save_setup(QEMUFile *f, void *opaque)
     RAMBlock *block;
     int64_t ram_bitmap_pages; /* Size of bitmap in pages, including gaps */
 
-    dirty_rate_high_cnt = 0;
     bitmap_sync_count = 0;
     migration_bitmap_sync_init();
     qemu_mutex_init(&migration_bitmap_mutex);
