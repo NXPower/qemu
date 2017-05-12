@@ -26,6 +26,7 @@
  * THE SOFTWARE.
  */
 #include "qemu/osdep.h"
+#include <math.h>
 #include <zlib.h>
 #include "qapi-event.h"
 #include "qemu/cutils.h"
@@ -416,29 +417,6 @@ static size_t save_page_header(QEMUFile *f, RAMBlock *block, ram_addr_t offset)
     return size;
 }
 
-/* Reduce amount of guest cpu execution to hopefully slow down memory writes.
- * If guest dirty memory rate is reduced below the rate at which we can
- * transfer pages to the destination then we should be able to complete
- * migration. Some workloads dirty memory way too fast and will not effectively
- * converge, even with auto-converge.
- */
-static void mig_throttle_guest_down(void)
-{
-    MigrationState *s = migrate_get_current();
-    uint64_t pct_initial =
-            s->parameters[MIGRATION_PARAMETER_CPU_THROTTLE_INITIAL];
-    uint64_t pct_icrement =
-            s->parameters[MIGRATION_PARAMETER_CPU_THROTTLE_INCREMENT];
-
-    /* We have not started throttling yet. Let's start it. */
-    if (!cpu_throttle_active()) {
-        cpu_throttle_set(pct_initial);
-    } else {
-        /* Throttling already on, just increase the rate */
-        cpu_throttle_set(cpu_throttle_get_percentage() + pct_icrement);
-    }
-}
-
 /* Update the xbzrle cache to reflect a page that's been sent as all 0.
  * The important thing is that a stale (not-yet-0'd) page be replaced
  * by the new data.
@@ -598,6 +576,7 @@ static int64_t bytes_xfer_prev;
 static int64_t num_dirty_pages_period;
 static uint64_t xbzrle_cache_miss_prev;
 static uint64_t iterations_prev;
+static double req_mult_prev;
 
 static void migration_bitmap_sync_init(void)
 {
@@ -606,6 +585,7 @@ static void migration_bitmap_sync_init(void)
     num_dirty_pages_period = 0;
     xbzrle_cache_miss_prev = 0;
     iterations_prev = 0;
+    req_mult_prev = 1;
 }
 
 static void migration_bitmap_sync(void)
@@ -617,10 +597,6 @@ static void migration_bitmap_sync(void)
     int64_t bytes_xfer_now;
 
     bitmap_sync_count++;
-
-    if (!bytes_xfer_prev) {
-        bytes_xfer_prev = ram_bytes_transferred();
-    }
 
     if (!start_time) {
         start_time = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
@@ -650,17 +626,37 @@ static void migration_bitmap_sync(void)
         s->dirty_bytes_rate = s->dirty_pages_rate * TARGET_PAGE_SIZE;
 
         if (migrate_auto_converge()) {
-            /* The following detection logic can be refined later. For now:
-               Check to see if the dirtied bytes is 50% more than the approx.
-               amount of bytes that just got transferred since the last time we
-               were in this routine. If that happens twice, start or increase
-               throttling */
+            int64_t xfer_period, dirt_period;
+            double req_mult;
+
             bytes_xfer_now = ram_bytes_transferred();
 
-            if (num_dirty_pages_period * TARGET_PAGE_SIZE >
-                    (bytes_xfer_now - bytes_xfer_prev)/2) {
+            /* bytes */
+            xfer_period = bytes_xfer_now - bytes_xfer_prev;
+            dirt_period = num_dirty_pages_period * TARGET_PAGE_SIZE;
+
+            if (dirt_period != 0) {
+                req_mult = (double)xfer_period / (2*dirt_period);
+            } else {
+                req_mult = 1.0;
+            }
+
+            if (req_mult < 1.0) {
+                int req_thr;
+
+                /* req_mult calculated above is the /additional/ scaling needed
+                 * based on the current amount of throttle. Multiply it by the
+                 * previous scaling to calculate the new throttle needed. */
+                req_mult *= req_mult_prev;
+                req_thr = (int)ceil(100.0 * (1.0 - req_mult));
+                if (req_thr == 100) {
+                    req_thr = 99;
+                }
+
                 trace_migration_throttle();
-                mig_throttle_guest_down();
+
+                cpu_throttle_set(req_thr);
+                req_mult_prev = req_mult;
             }
             bytes_xfer_prev = bytes_xfer_now;
         }
