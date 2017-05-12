@@ -19,7 +19,7 @@
 #include "qemu/atomic.h"
 #include "qemu/notify.h"
 
-#define QEMU_THREAD_STACK_SIZE (128UL << 10)
+#define QEMU_THREAD_STACK_SIZE (128 * 1024 + PTHREAD_STACK_MIN)
 
 static bool name_threads;
 
