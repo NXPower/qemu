@@ -644,6 +644,11 @@ static void migration_bitmap_sync(void)
 
     /* more than 1 second = 1000 millisecons */
     if (end_time > start_time + 1000) {
+        /* adjust rate counters */
+        s->dirty_pages_rate = num_dirty_pages_period * 1000
+            / (end_time - start_time);
+        s->dirty_bytes_rate = s->dirty_pages_rate * TARGET_PAGE_SIZE;
+
         if (migrate_auto_converge()) {
             /* The following detection logic can be refined later. For now:
                Check to see if the dirtied bytes is 50% more than the approx.
@@ -652,13 +657,12 @@ static void migration_bitmap_sync(void)
                throttling */
             bytes_xfer_now = ram_bytes_transferred();
 
-            if (s->dirty_pages_rate &&
-               (num_dirty_pages_period * TARGET_PAGE_SIZE >
-                   (bytes_xfer_now - bytes_xfer_prev)/2)) {
-                    trace_migration_throttle();
-                    mig_throttle_guest_down();
-             }
-             bytes_xfer_prev = bytes_xfer_now;
+            if (num_dirty_pages_period * TARGET_PAGE_SIZE >
+                    (bytes_xfer_now - bytes_xfer_prev)/2) {
+                trace_migration_throttle();
+                mig_throttle_guest_down();
+            }
+            bytes_xfer_prev = bytes_xfer_now;
         }
 
         if (migrate_use_xbzrle()) {
@@ -671,9 +675,8 @@ static void migration_bitmap_sync(void)
             iterations_prev = acct_info.iterations;
             xbzrle_cache_miss_prev = acct_info.xbzrle_cache_miss;
         }
-        s->dirty_pages_rate = num_dirty_pages_period * 1000
-            / (end_time - start_time);
-        s->dirty_bytes_rate = s->dirty_pages_rate * TARGET_PAGE_SIZE;
+
+        /* reset iteration counters */
         start_time = end_time;
         num_dirty_pages_period = 0;
     }
