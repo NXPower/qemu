@@ -33,4 +33,4 @@
 	url = git://git.qemu-project.org/u-boot.git
 [submodule "libiscsi"]
 	path = libiscsi
-	url = git@filer:kvm-qemu-libiscsi
+	url = https://github.com/NXPower/libiscsi.git
