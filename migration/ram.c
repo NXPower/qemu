@@ -577,6 +577,7 @@ static int64_t num_dirty_pages_period;
 static uint64_t xbzrle_cache_miss_prev;
 static uint64_t iterations_prev;
 static double req_mult_prev;
+static int retry_at_limit_cnt;
 
 static void migration_bitmap_sync_init(void)
 {
@@ -586,6 +587,7 @@ static void migration_bitmap_sync_init(void)
     xbzrle_cache_miss_prev = 0;
     iterations_prev = 0;
     req_mult_prev = 1;
+    retry_at_limit_cnt = 0;
 }
 
 static void migration_bitmap_sync(void)
@@ -653,10 +655,15 @@ static void migration_bitmap_sync(void)
                     req_thr = 99;
                 }
 
-                trace_migration_throttle();
-
-                cpu_throttle_set(req_thr);
-                req_mult_prev = req_mult;
+                if ((req_thr == 99) && (retry_at_limit_cnt++ == 10)) {
+                    error_report("Not converging after 10 attempts at 99%%.");
+                    migrate_set_state(&s->state, s->state,
+                                      MIGRATION_STATUS_FAILED);
+                } else {
+                    trace_migration_throttle();
+                    cpu_throttle_set(req_thr);
+                    req_mult_prev = req_mult;
+                }
             }
             bytes_xfer_prev = bytes_xfer_now;
         }
