@@ -655,8 +655,8 @@ static void migration_bitmap_sync(void)
                     req_thr = 99;
                 }
 
-                if ((req_thr == 99) && (retry_at_limit_cnt++ == 10)) {
-                    error_report("Not converging after 10 attempts at 99%%.");
+                if ((req_thr == 99) && (retry_at_limit_cnt++ == 50)) {
+                    error_report("Not converging after 50 attempts at 99%%.");
                     migrate_set_state(&s->state, s->state,
                                       MIGRATION_STATUS_FAILED);
                 } else {
