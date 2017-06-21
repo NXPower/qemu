@@ -592,9 +592,19 @@ static void cpu_throttle_timer_tick(void *opaque)
 
 void cpu_throttle_set(int new_throttle_pct)
 {
+    struct timespec ts;
+    char timebuf[64];
+    struct tm tm;
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    strftime(timebuf, sizeof(timebuf), "%Y%m%d %T", gmtime_r(&ts.tv_sec, &tm));
+
     /* Ensure throttle percentage is within valid range */
     new_throttle_pct = MIN(new_throttle_pct, CPU_THROTTLE_PCT_MAX);
     new_throttle_pct = MAX(new_throttle_pct, CPU_THROTTLE_PCT_MIN);
+
+    printf("%s.%06ld qemu-kvm: Setting CPU throttle to %d %%\n",
+           timebuf, ts.tv_nsec/1000, new_throttle_pct);
 
     atomic_set(&throttle_percentage, new_throttle_pct);
 
