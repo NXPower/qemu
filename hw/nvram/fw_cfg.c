@@ -709,6 +709,7 @@ static struct {
     { "etc/reserved-memory-end", 50 },
     { "genroms/kvmvapic.bin", 55 },
     { "genroms/linuxboot.bin", 60 },
+    { "genroms/bootfail.bin", 65 },
     { }, /* VGA ROMs from pc_vga_init come here, 70. */
     { }, /* NIC option ROMs from pc_nic_init come here, 80. */
     { "etc/system-states", 90 },
