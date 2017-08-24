@@ -532,6 +532,11 @@ static void kvm_uncoalesce_mmio_region(MemoryListener *listener,
 int kvm_check_extension(KVMState *s, unsigned int extension)
 {
     int ret;
+    // SMM mode doubles the KVM RMAP memory consumption.
+    // Supress it for AHV.
+    if (extension == KVM_CAP_X86_SMM) {
+      return 0;
+    }
 
     ret = kvm_ioctl(s, KVM_CHECK_EXTENSION, extension);
     if (ret < 0) {
