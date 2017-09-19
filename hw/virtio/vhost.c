@@ -374,8 +374,6 @@ static void vhost_log_put(struct vhost_dev *dev, bool sync)
     if (!log) {
         return;
     }
-    dev->log = NULL;
-    dev->log_size = 0;
 
     --log->refcnt;
     if (log->refcnt == 0) {
@@ -395,6 +393,9 @@ static void vhost_log_put(struct vhost_dev *dev, bool sync)
 
         g_free(log);
     }
+
+    dev->log = NULL;
+    dev->log_size = 0;
 }
 
 static bool vhost_dev_log_is_shared(struct vhost_dev *dev)
