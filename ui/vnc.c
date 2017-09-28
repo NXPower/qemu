@@ -2216,6 +2216,7 @@ static void set_pixel_format(VncState *vs, int bits_per_pixel,
     switch (bits_per_pixel) {
     case 8:
     case 16:
+    case 24:
     case 32:
         break;
     default:
