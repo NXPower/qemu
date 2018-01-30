@@ -221,6 +221,18 @@ struct sPAPRMachineState {
 #define H_DABRX_KERNEL     (1ULL<<(63-62))
 #define H_DABRX_USER       (1ULL<<(63-63))
 
+/* Values for KVM_PPC_GET_CPU_CHAR & H_GET_CPU_CHARACTERISTICS */
+#define H_CPU_CHAR_SPEC_BAR_ORI31               (1ULL << (63 - 0))
+#define H_CPU_CHAR_BCCTRL_SERIALISED            (1ULL << (63 - 1))
+#define H_CPU_CHAR_L1D_FLUSH_ORI30              (1ULL << (63 - 2))
+#define H_CPU_CHAR_L1D_FLUSH_TRIG2              (1ULL << (63 - 3))
+#define H_CPU_CHAR_L1D_THREAD_PRIV              (1ULL << (63 - 4))
+#define H_CPU_CHAR_HON_BRANCH_HINTS             (1ULL << (63 - 5))
+#define H_CPU_CHAR_THR_RECONF_TRIG              (1ULL << (63 - 6))
+#define H_CPU_BEHAV_FAVOUR_SECURITY             (1ULL << (63 - 0))
+#define H_CPU_BEHAV_L1D_FLUSH_PR                (1ULL << (63 - 1))
+#define H_CPU_BEHAV_BNDS_CHK_SPEC_BAR           (1ULL << (63 - 2))
+
 /* Each control block has to be on a 4K boundary */
 #define H_CB_ALIGNMENT     4096
 
