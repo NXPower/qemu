@@ -56,6 +56,8 @@ static inline bool qemu_loglevel_mask(int mask)
  */
 void GCC_FMT_ATTR(1, 2) qemu_log(const char *fmt, ...);
 
+void GCC_FMT_ATTR(1, 2) printf_ts(const char *fmt, ...);
+
 /* vfprintf-like logging function
  */
 static inline void GCC_FMT_ATTR(1, 0)

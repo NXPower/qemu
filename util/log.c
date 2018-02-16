@@ -42,6 +42,24 @@ void qemu_log(const char *fmt, ...)
     va_end(ap);
 }
 
+void printf_ts(const char *fmt, ...)
+{
+    struct timespec ts;
+    char timebuf[64];
+    struct tm tm;
+
+    va_list ap;
+    va_start(ap, fmt);
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    strftime(timebuf, sizeof(timebuf), "%Y%m%d %T", gmtime_r(&ts.tv_sec, &tm));
+
+    printf("%s.%06ld qemu-kvm: ", timebuf, ts.tv_nsec/1000);
+    vprintf(fmt, ap);
+
+    va_end(ap);
+}
+
 /* enable or disable low levels log */
 void do_qemu_set_log(int log_flags, bool use_own_buffers)
 {
