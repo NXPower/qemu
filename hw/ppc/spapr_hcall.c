@@ -1,6 +1,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "sysemu/sysemu.h"
+#include "qemu/error-report.h"
 #include "cpu.h"
 #include "helper_regs.h"
 #include "hw/ppc/spapr.h"
@@ -1038,6 +1039,70 @@ static target_ulong h_client_architecture_support(PowerPCCPU *cpu_,
     return H_SUCCESS;
 }
 
+static target_ulong h_get_cpu_characteristics(PowerPCCPU *cpu,
+                                              sPAPRMachineState *spapr,
+                                              target_ulong opcode,
+                                              target_ulong *args)
+{
+    uint64_t characteristics = H_CPU_CHAR_HON_BRANCH_HINTS &
+			       ~H_CPU_CHAR_THR_RECONF_TRIG;
+    uint64_t behaviour = H_CPU_BEHAV_FAVOUR_SECURITY;
+    int safe_cache = kvmppc_get_cap_safe_cache();
+    int safe_bounds_check = kvmppc_get_cap_safe_bounds_check();
+    int safe_indirect_branch = kvmppc_get_cap_safe_indirect_branch();
+
+    switch (safe_cache) {
+    case 1:
+        characteristics |= H_CPU_CHAR_L1D_FLUSH_ORI30;
+        characteristics |= H_CPU_CHAR_L1D_FLUSH_TRIG2;
+        characteristics |= H_CPU_CHAR_L1D_THREAD_PRIV;
+        behaviour |= H_CPU_BEHAV_L1D_FLUSH_PR;
+        break;
+    case 2:
+        break;
+    default: /* broken */
+        if (safe_cache != 0) {
+            error_report("Invalid value for safe cache (%d), assuming broken",
+                         safe_cache);
+        }
+        behaviour |= H_CPU_BEHAV_L1D_FLUSH_PR;
+        break;
+    }
+
+    switch (safe_bounds_check) {
+    case 1:
+        characteristics |= H_CPU_CHAR_SPEC_BAR_ORI31;
+        behaviour |= H_CPU_BEHAV_BNDS_CHK_SPEC_BAR;
+        break;
+    case 2:
+        break;
+    default: /* broken */
+        if (safe_bounds_check != 0) {
+            error_report("Invalid value for safe bounds check (%d), assuming broken",
+                         safe_bounds_check);
+        }
+        behaviour |= H_CPU_BEHAV_BNDS_CHK_SPEC_BAR;
+        break;
+    }
+
+    switch (safe_indirect_branch) {
+    case 2:
+        characteristics |= H_CPU_CHAR_BCCTRL_SERIALISED;
+        break;
+    default: /* broken */
+        if (safe_indirect_branch != 0) {
+            error_report("Invalid value for safe indirect branch (%d), assuming broken",
+                         safe_indirect_branch);
+        }
+        break;
+    }
+
+    args[0] = characteristics;
+    args[1] = behaviour;
+
+    return H_SUCCESS;
+}
+
 static spapr_hcall_fn papr_hypercall_table[(MAX_HCALL_OPCODE / 4) + 1];
 static spapr_hcall_fn kvmppc_hypercall_table[KVMPPC_HCALL_MAX - KVMPPC_HCALL_BASE + 1];
 
@@ -1099,6 +1164,9 @@ static void hypercall_register_types(void)
     /* hcall-splpar */
     spapr_register_hypercall(H_REGISTER_VPA, h_register_vpa);
     spapr_register_hypercall(H_CEDE, h_cede);
+
+    /* hcall-get-cpu-characteristics */
+    spapr_register_hypercall(H_GET_CPU_CHARACTERISTICS, h_get_cpu_characteristics);
 
     /* processor register resource access h-calls */
     spapr_register_hypercall(H_SET_SPRG0, h_set_sprg0);
