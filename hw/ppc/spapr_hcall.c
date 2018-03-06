@@ -1044,57 +1044,21 @@ static target_ulong h_get_cpu_characteristics(PowerPCCPU *cpu,
                                               target_ulong opcode,
                                               target_ulong *args)
 {
-    uint64_t characteristics = H_CPU_CHAR_HON_BRANCH_HINTS &
-			       ~H_CPU_CHAR_THR_RECONF_TRIG;
-    uint64_t behaviour = H_CPU_BEHAV_FAVOUR_SECURITY;
-    int safe_cache = kvmppc_get_cap_safe_cache();
-    int safe_bounds_check = kvmppc_get_cap_safe_bounds_check();
-    int safe_indirect_branch = kvmppc_get_cap_safe_indirect_branch();
+    uint64_t characteristics = kvmppc_get_cap_ppc_cpu_char_character();
+    uint64_t behaviour = kvmppc_get_cap_ppc_cpu_char_behaviour();
 
-    switch (safe_cache) {
-    case 1:
-        characteristics |= H_CPU_CHAR_L1D_FLUSH_ORI30;
-        characteristics |= H_CPU_CHAR_L1D_FLUSH_TRIG2;
-        characteristics |= H_CPU_CHAR_L1D_THREAD_PRIV;
-        behaviour |= H_CPU_BEHAV_L1D_FLUSH_PR;
-        break;
-    case 2:
-        break;
-    default: /* broken */
-        if (safe_cache != 0) {
-            error_report("Invalid value for safe cache (%d), assuming broken",
-                         safe_cache);
-        }
-        behaviour |= H_CPU_BEHAV_L1D_FLUSH_PR;
-        break;
-    }
+    characteristics |= H_CPU_CHAR_HON_BRANCH_HINTS;
 
-    switch (safe_bounds_check) {
-    case 1:
-        characteristics |= H_CPU_CHAR_SPEC_BAR_ORI31;
-        behaviour |= H_CPU_BEHAV_BNDS_CHK_SPEC_BAR;
-        break;
-    case 2:
-        break;
-    default: /* broken */
-        if (safe_bounds_check != 0) {
-            error_report("Invalid value for safe bounds check (%d), assuming broken",
-                         safe_bounds_check);
+    if (behaviour & H_CPU_BEHAV_L1D_FLUSH_PR) {
+        /*
+         * To enable P8->P9 & P9->P8 migration, if either of the cache flush
+         * instructions are available, then tell the guest to use both.
+         */
+        if (characteristics & (H_CPU_CHAR_L1D_FLUSH_ORI30 |
+                               H_CPU_CHAR_L1D_FLUSH_TRIG2)) {
+            characteristics |= H_CPU_CHAR_L1D_FLUSH_ORI30 |
+                               H_CPU_CHAR_L1D_FLUSH_TRIG2;
         }
-        behaviour |= H_CPU_BEHAV_BNDS_CHK_SPEC_BAR;
-        break;
-    }
-
-    switch (safe_indirect_branch) {
-    case 2:
-        characteristics |= H_CPU_CHAR_BCCTRL_SERIALISED;
-        break;
-    default: /* broken */
-        if (safe_indirect_branch != 0) {
-            error_report("Invalid value for safe indirect branch (%d), assuming broken",
-                         safe_indirect_branch);
-        }
-        break;
     }
 
     args[0] = characteristics;

@@ -80,9 +80,8 @@ static int cap_ppc_watchdog;
 static int cap_papr;
 static int cap_htab_fd;
 static int cap_fixup_hcalls;
-static int cap_ppc_safe_cache;
-static int cap_ppc_safe_bounds_check;
-static int cap_ppc_safe_indirect_branch;
+static uint64_t cap_ppc_cpu_char_character;
+static uint64_t cap_ppc_cpu_char_behaviour;
 
 static uint32_t debug_inst_opcode;
 
@@ -2350,11 +2349,6 @@ static void kvmppc_get_cpu_characteristics(KVMState *s)
     struct kvm_ppc_cpu_char c;
     int ret;
 
-    /* Assume broken */
-    cap_ppc_safe_cache = 0;
-    cap_ppc_safe_bounds_check = 0;
-    cap_ppc_safe_indirect_branch = 0;
-
     ret = kvm_vm_check_extension(s, KVM_CAP_PPC_GET_CPU_CHAR);
     if (!ret) {
         return;
@@ -2363,39 +2357,19 @@ static void kvmppc_get_cpu_characteristics(KVMState *s)
     if (ret < 0) {
         return;
     }
-    /* Parse and set cap_ppc_safe_cache */
-    if (~c.behaviour & c.b_mask & H_CPU_BEHAV_L1D_FLUSH_PR) {
-        cap_ppc_safe_cache = 2;
-    } else if ((c.character & c.c_mask & H_CPU_CHAR_L1D_THREAD_PRIV) &&
-               (c.character & c.c_mask & (H_CPU_CHAR_L1D_FLUSH_ORI30 |
-                                          H_CPU_CHAR_L1D_FLUSH_TRIG2))) {
-        cap_ppc_safe_cache = 1;
-    }
-    /* Parse and set cap_ppc_safe_bounds_check */
-    if (~c.behaviour & c.b_mask & H_CPU_BEHAV_BNDS_CHK_SPEC_BAR) {
-        cap_ppc_safe_bounds_check = 2;
-    } else if (c.character & c.c_mask & H_CPU_CHAR_SPEC_BAR_ORI31) {
-        cap_ppc_safe_bounds_check = 1;
-    }
-    /* Parse and set cap_ppc_safe_indirect_branch */
-    if (c.character & H_CPU_CHAR_BCCTRL_SERIALISED) {
-        cap_ppc_safe_indirect_branch = 2;
-    }
+
+    cap_ppc_cpu_char_character = c.character & c.c_mask;
+    cap_ppc_cpu_char_behaviour = c.behaviour & c.b_mask;
 }
 
-int kvmppc_get_cap_safe_cache(void)
+uint64_t kvmppc_get_cap_ppc_cpu_char_character(void)
 {
-    return cap_ppc_safe_cache;
+    return cap_ppc_cpu_char_character;
 }
 
-int kvmppc_get_cap_safe_bounds_check(void)
+uint64_t kvmppc_get_cap_ppc_cpu_char_behaviour(void)
 {
-    return cap_ppc_safe_bounds_check;
-}
-
-int kvmppc_get_cap_safe_indirect_branch(void)
-{
-    return cap_ppc_safe_indirect_branch;
+    return cap_ppc_cpu_char_behaviour;
 }
 
 static PowerPCCPUClass *ppc_cpu_get_family_class(PowerPCCPUClass *pcc)
