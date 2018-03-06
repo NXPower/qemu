@@ -54,9 +54,8 @@ void kvmppc_hash64_free_pteg(uint64_t token);
 void kvmppc_hash64_write_pte(CPUPPCState *env, target_ulong pte_index,
                              target_ulong pte0, target_ulong pte1);
 bool kvmppc_has_cap_fixup_hcalls(void);
-int kvmppc_get_cap_safe_cache(void);
-int kvmppc_get_cap_safe_bounds_check(void);
-int kvmppc_get_cap_safe_indirect_branch(void);
+uint64_t kvmppc_get_cap_ppc_cpu_char_character(void);
+uint64_t kvmppc_get_cap_ppc_cpu_char_behaviour(void);
 int kvmppc_enable_hwrng(void);
 int kvmppc_put_books_sregs(PowerPCCPU *cpu);
 PowerPCCPUClass *kvm_ppc_get_host_cpu_class(void);
@@ -247,19 +246,14 @@ static inline bool kvmppc_has_cap_fixup_hcalls(void)
     abort();
 }
 
-static inline int kvmppc_get_cap_safe_cache(void)
+static inline uint64_t kvmppc_get_cap_ppc_cpu_char_character(void)
 {
-    return 0;
+    return 0ULL;
 }
 
-static inline int kvmppc_get_cap_safe_bounds_check(void)
+static inline uint64_t kvmppc_get_cap_ppc_cpu_char_behaviour(void)
 {
-    return 0;
-}
-
-static inline int kvmppc_get_cap_safe_indirect_branch(void)
-{
-    return 0;
+    return 0ULL;
 }
 
 static inline int kvmppc_enable_hwrng(void)
