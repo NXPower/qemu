@@ -2835,6 +2835,15 @@ int kvmppc_enable_hwrng(void)
     return kvmppc_enable_hcall(kvm_state, H_RANDOM);
 }
 
+void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu, unsigned int online)
+{
+    CPUState *cs = CPU(cpu);
+
+    if (kvm_enabled()) {
+        kvm_set_one_reg(cs, KVM_REG_PPC_ONLINE, &online);
+    }
+}
+
 void kvmppc_check_papr_resize_hpt(Error **errp)
 {
     if (!kvm_enabled()) {

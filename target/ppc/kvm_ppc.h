@@ -64,6 +64,7 @@ int kvmppc_get_cap_safe_cache(void);
 int kvmppc_get_cap_safe_bounds_check(void);
 int kvmppc_get_cap_safe_indirect_branch(void);
 int kvmppc_enable_hwrng(void);
+void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu, unsigned int online);
 int kvmppc_put_books_sregs(PowerPCCPU *cpu);
 PowerPCCPUClass *kvm_ppc_get_host_cpu_class(void);
 void kvmppc_check_papr_resize_hpt(Error **errp);
@@ -185,6 +186,11 @@ static inline target_ulong kvmppc_configure_v3_mmu(PowerPCCPU *cpu,
                                      uint64_t proc_tbl)
 {
     return 0;
+}
+
+static inline void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu, unsigned int online)
+{
+    return;
 }
 
 #ifndef CONFIG_USER_ONLY
