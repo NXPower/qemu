@@ -59,6 +59,7 @@ uint64_t kvmppc_get_cap_ppc_cpu_char_behaviour(void);
 int kvmppc_enable_hwrng(void);
 int kvmppc_put_books_sregs(PowerPCCPU *cpu);
 PowerPCCPUClass *kvm_ppc_get_host_cpu_class(void);
+void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu, unsigned int online);
 
 #else
 
@@ -151,6 +152,11 @@ static inline int kvmppc_set_tcr(PowerPCCPU *cpu)
 static inline int kvmppc_booke_watchdog_enable(PowerPCCPU *cpu)
 {
     return -1;
+}
+
+static inline void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu, unsigned int online)
+{
+    return;
 }
 
 #ifndef CONFIG_USER_ONLY
