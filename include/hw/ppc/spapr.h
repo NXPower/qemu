@@ -489,6 +489,7 @@ int spapr_allocate_irq_block(int num, bool lsi, bool msi);
 /* RTAS ibm,get-system-parameter token values */
 #define RTAS_SYSPARM_SPLPAR_CHARACTERISTICS      20
 #define RTAS_SYSPARM_DIAGNOSTICS_RUN_MODE        42
+#define RTAS_SYSPARM_PROCESSOR_MODULE_INFO       43
 #define RTAS_SYSPARM_UUID                        48
 
 /* RTAS indicator/sensor types
@@ -657,5 +658,7 @@ int spapr_rng_populate_dt(void *fdt);
  * property under ibm,dynamic-reconfiguration-memory node.
  */
 #define SPAPR_LMB_FLAGS_ASSIGNED 0x00000008
+
+#define SPAPR_MAX_MODULE_TYPES  1
 
 #endif /* !defined (__HW_SPAPR_H__) */

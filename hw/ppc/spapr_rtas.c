@@ -310,6 +310,42 @@ static void rtas_ibm_get_system_parameter(PowerPCCPU *cpu,
         ret = sysparm_st(buffer, length, &param_val, sizeof(param_val));
         break;
     }
+    case RTAS_SYSPARM_PROCESSOR_MODULE_INFO: {
+        int i, offset = 0;
+        uint16_t cores[SPAPR_MAX_MODULE_TYPES], 
+                 chips[SPAPR_MAX_MODULE_TYPES],
+                 sockets[SPAPR_MAX_MODULE_TYPES],
+                 mtypes = 0, len;
+
+        if (kvmppc_rtas_get_proc_module_info(&mtypes,sockets,chips,cores)) {
+            ret = RTAS_OUT_NOT_SUPPORTED;
+            break;
+        }
+        len = (mtypes*6) + 2;
+
+        stw_be_phys(&address_space_memory,
+                ppc64_phys_to_real(buffer+offset), len);
+        offset += 2;
+
+        stw_be_phys(&address_space_memory,
+                ppc64_phys_to_real(buffer+offset), mtypes);
+        offset += 2;
+
+        for (i = 0; i < mtypes; i++) {
+            stw_be_phys(&address_space_memory,
+                    ppc64_phys_to_real(buffer+offset), sockets[i]);
+            offset += 2;
+            stw_be_phys(&address_space_memory,
+                    ppc64_phys_to_real(buffer+offset), chips[i]);
+            offset += 2;
+            stw_be_phys(&address_space_memory,
+                    ppc64_phys_to_real(buffer+offset), cores[i]);
+            offset += 2;
+        }
+
+        ret = RTAS_OUT_SUCCESS;
+        break;
+    }
     case RTAS_SYSPARM_UUID:
         ret = sysparm_st(buffer, length, qemu_uuid, (qemu_uuid_set ? 16 : 0));
         break;
@@ -332,6 +368,7 @@ static void rtas_ibm_set_system_parameter(PowerPCCPU *cpu,
     switch (parameter) {
     case RTAS_SYSPARM_SPLPAR_CHARACTERISTICS:
     case RTAS_SYSPARM_DIAGNOSTICS_RUN_MODE:
+    case RTAS_SYSPARM_PROCESSOR_MODULE_INFO:
     case RTAS_SYSPARM_UUID:
         ret = RTAS_OUT_NOT_AUTHORIZED;
         break;

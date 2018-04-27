@@ -2801,3 +2801,24 @@ int kvmppc_count_ppc_cores_dt(void)
 
     return num_cores;
 }
+
+int kvmppc_rtas_get_proc_module_info(uint16_t *mtypes, uint16_t *sockets, uint16_t *chips, uint16_t *cores)
+{
+    int _sockets = 0, _chips = 0, _cores = 0;
+
+    /* POWER systems only support 1 module type per system
+     * currently
+     */
+    mtypes[0] = 1;
+    if (kvmppc_count_sockets_chips_dt(&_sockets, &_chips))
+        return -1;
+    _cores = kvmppc_count_ppc_cores_dt();
+    if ( _cores  <= 0 )
+        return -1;
+
+    sockets[0] = _sockets;
+    chips[0] = _chips / _sockets;
+    cores[0] = _cores / _chips;    
+
+    return 0;
+}
