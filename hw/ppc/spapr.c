@@ -1200,6 +1200,7 @@ static void ppc_spapr_reset(void)
     first_ppc_cpu->env.gpr[5] = 0;
     first_cpu->halted = 0;
     first_ppc_cpu->env.nip = SPAPR_ENTRY_POINT;
+    kvmppc_set_reg_ppc_online(first_ppc_cpu, 1);
 
 }
 

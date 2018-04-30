@@ -31,6 +31,7 @@
 #include "hw/qdev.h"
 #include "sysemu/device_tree.h"
 #include "sysemu/cpus.h"
+#include "kvm_ppc.h"
 
 #include "hw/ppc/spapr.h"
 #include "hw/ppc/spapr_vio.h"
@@ -223,6 +224,8 @@ static void rtas_start_cpu(PowerPCCPU *cpu_, sPAPRMachineState *spapr,
         spapr_cpu_set_endianness(cpu);
         spapr_cpu_update_tb_offset(cpu);
 
+        kvmppc_set_reg_ppc_online(cpu, 1);
+
         qemu_cpu_kick(cs);
 
         rtas_st(rets, 0, RTAS_OUT_SUCCESS);
@@ -242,6 +245,7 @@ static void rtas_stop_self(PowerPCCPU *cpu, sPAPRMachineState *spapr,
     CPUPPCState *env = &cpu->env;
 
     cs->halted = 1;
+    kvmppc_set_reg_ppc_online(cpu, 0);
     qemu_cpu_kick(cs);
     /*
      * While stopping a CPU, the guest calls H_CPPR which
@@ -281,14 +285,21 @@ static void rtas_ibm_get_system_parameter(PowerPCCPU *cpu,
 
     switch (parameter) {
     case RTAS_SYSPARM_SPLPAR_CHARACTERISTICS: {
+        int virtcores_nr = smp_cpus / smp_threads;
+        int max_virtcores_nr = max_cpus / smp_threads;
+        int max_ent = max_virtcores_nr * 100;
+        int physical_cores_nr = kvmppc_count_ppc_cores_dt();
+        if (physical_cores_nr < 0) {
+            physical_cores_nr = max_virtcores_nr;
+        }
         char *param_val = g_strdup_printf("MaxEntCap=%d,"
                                           "DesMem=%llu,"
                                           "DesProcs=%d,"
                                           "MaxPlatProcs=%d",
-                                          max_cpus,
+                                          max_ent,
                                           current_machine->ram_size / M_BYTE,
-                                          smp_cpus,
-                                          max_cpus);
+                                          virtcores_nr,
+                                          physical_cores_nr);
         ret = sysparm_st(buffer, length, param_val, strlen(param_val) + 1);
         g_free(param_val);
         break;
@@ -297,6 +308,42 @@ static void rtas_ibm_get_system_parameter(PowerPCCPU *cpu,
         uint8_t param_val = DIAGNOSTICS_RUN_MODE_DISABLED;
 
         ret = sysparm_st(buffer, length, &param_val, sizeof(param_val));
+        break;
+    }
+    case RTAS_SYSPARM_PROCESSOR_MODULE_INFO: {
+        int i, offset = 0;
+        uint16_t cores[SPAPR_MAX_MODULE_TYPES], 
+                 chips[SPAPR_MAX_MODULE_TYPES],
+                 sockets[SPAPR_MAX_MODULE_TYPES],
+                 mtypes = 0, len;
+
+        if (kvmppc_rtas_get_proc_module_info(&mtypes,sockets,chips,cores)) {
+            ret = RTAS_OUT_NOT_SUPPORTED;
+            break;
+        }
+        len = (mtypes*6) + 2;
+
+        stw_be_phys(&address_space_memory,
+                ppc64_phys_to_real(buffer+offset), len);
+        offset += 2;
+
+        stw_be_phys(&address_space_memory,
+                ppc64_phys_to_real(buffer+offset), mtypes);
+        offset += 2;
+
+        for (i = 0; i < mtypes; i++) {
+            stw_be_phys(&address_space_memory,
+                    ppc64_phys_to_real(buffer+offset), sockets[i]);
+            offset += 2;
+            stw_be_phys(&address_space_memory,
+                    ppc64_phys_to_real(buffer+offset), chips[i]);
+            offset += 2;
+            stw_be_phys(&address_space_memory,
+                    ppc64_phys_to_real(buffer+offset), cores[i]);
+            offset += 2;
+        }
+
+        ret = RTAS_OUT_SUCCESS;
         break;
     }
     case RTAS_SYSPARM_UUID:
@@ -321,6 +368,7 @@ static void rtas_ibm_set_system_parameter(PowerPCCPU *cpu,
     switch (parameter) {
     case RTAS_SYSPARM_SPLPAR_CHARACTERISTICS:
     case RTAS_SYSPARM_DIAGNOSTICS_RUN_MODE:
+    case RTAS_SYSPARM_PROCESSOR_MODULE_INFO:
     case RTAS_SYSPARM_UUID:
         ret = RTAS_OUT_NOT_AUTHORIZED;
         break;

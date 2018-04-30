@@ -59,6 +59,9 @@ uint64_t kvmppc_get_cap_ppc_cpu_char_behaviour(void);
 int kvmppc_enable_hwrng(void);
 int kvmppc_put_books_sregs(PowerPCCPU *cpu);
 PowerPCCPUClass *kvm_ppc_get_host_cpu_class(void);
+void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu, unsigned int online);
+int kvmppc_count_ppc_cores_dt(void);
+int kvmppc_rtas_get_proc_module_info(uint16_t *mtypes, uint16_t *sockets, uint16_t *chips, uint16_t *cores);
 
 #else
 
@@ -149,6 +152,24 @@ static inline int kvmppc_set_tcr(PowerPCCPU *cpu)
 }
 
 static inline int kvmppc_booke_watchdog_enable(PowerPCCPU *cpu)
+{
+    return -1;
+}
+
+static inline void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu, unsigned int online)
+{
+    return;
+}
+
+static inline int kvmppc_count_ppc_cores_dt(void)
+{
+    return -1;
+}
+
+static int kvmppc_rtas_get_proc_module_info(uint16_t *mtypes, 
+                                            uint16_t *sockets, 
+                                            uint16_t *chips, 
+                                            uint16_t *cores)
 {
     return -1;
 }
@@ -315,17 +336,5 @@ static inline void kvmppc_icbi_range(PowerPCCPU *cpu, uint8_t *addr, int len)
 }
 
 #endif  /* CONFIG_KVM */
-
-#ifndef KVM_INTERRUPT_SET
-#define KVM_INTERRUPT_SET -1
-#endif
-
-#ifndef KVM_INTERRUPT_UNSET
-#define KVM_INTERRUPT_UNSET -2
-#endif
-
-#ifndef KVM_INTERRUPT_SET_LEVEL
-#define KVM_INTERRUPT_SET_LEVEL -3
-#endif
 
 #endif /* __KVM_PPC_H__ */

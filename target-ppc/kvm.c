@@ -16,6 +16,7 @@
 
 #include "qemu/osdep.h"
 #include <dirent.h>
+#include <glob.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/vfs.h>
@@ -2681,4 +2682,143 @@ int kvmppc_enable_hwrng(void)
     }
 
     return kvmppc_enable_hcall(kvm_state, H_RANDOM);
+}
+
+void kvmppc_set_reg_ppc_online(PowerPCCPU *cpu, unsigned int online)
+{
+    CPUState *cs = CPU(cpu);
+
+    if (kvm_enabled()) {
+        kvm_set_one_reg(cs, KVM_REG_PPC_ONLINE, &online);
+    }
+}
+
+/* Read an identifier from the file @path and add the identifier
+ * to the hash table @gt unless its already in the table.
+ */
+static int kvmppc_hash_file_contents(GHashTable *gt, char *path)
+{
+    uint32_t idx;
+
+    idx = kvmppc_read_int_dt(path);
+    if (idx == -1) {
+        return -1;
+    }
+
+    if (g_hash_table_contains(gt, GINT_TO_POINTER(idx))) {
+        return 0;
+    }
+
+    if (!g_hash_table_insert(gt, GINT_TO_POINTER(idx), NULL)) {
+        fprintf(stderr, "%s() Unable to add key %d\n", __func__, idx);
+        return -1;
+    }
+
+    return 0;
+}
+
+static int kvmppc_glob_count_ids_dt(const char *pattern, int *count)
+{
+    int i, rc;
+    glob_t dtglob;
+    GHashTable *htbl;
+
+    rc = glob(pattern, GLOB_NOSORT, NULL, &dtglob);
+    if (rc) 
+        return -1;
+
+    rc = -1;
+    htbl = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, NULL);
+
+    for (i = 0; i < dtglob.gl_pathc; i++) {
+        if (kvmppc_hash_file_contents(htbl, dtglob.gl_pathv[i])) {
+            goto cleanup;
+        }
+    }
+
+    *count = g_hash_table_size(htbl);
+    rc = 0;
+
+cleanup:
+    globfree(&dtglob);
+    g_hash_table_remove_all(htbl);
+    g_hash_table_destroy(htbl);
+
+    return rc;
+}
+
+/* Each socket's (aka module's) id is contained in the 'ibm,hw-module-id'
+ * file in an "xscom" directory (/proc/device-tree/xscom*). Similarly each
+ * chip's id is contained in the 'ibm,chip-id' file in an xscom directory.
+ *
+ * Search the xscom directories and count the number of _UNIQUE_ modules
+ * and chips in the system.
+ *
+ * If the system does not contain 'ibm,hw-module-id', it is assumed to be
+ * one chip per module (SCM), so make modules count equals to chips count.
+ *
+ * Return 0 if one or more modules and chips each are found. Return -1
+ * otherwise.
+ */
+static int kvmppc_count_sockets_chips_dt(int *num_sockets, int *num_chips)
+{
+    const char *chip_pattern = "/proc/device-tree/xscom*/ibm,chip-id";
+    const char *module_pattern =
+"/proc/device-tree/xscom*/ibm,hw-module-id";
+
+    if (kvmppc_glob_count_ids_dt(module_pattern, num_sockets))
+        // SCM system
+        if (kvmppc_glob_count_ids_dt(chip_pattern, num_sockets))
+            return -1;
+    if (kvmppc_glob_count_ids_dt(chip_pattern, num_chips))
+        return -1;
+
+    if (*num_sockets == 0 || *num_chips == 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int kvmppc_count_ppc_cores_dt(void)
+{
+    int rc,num_cores = 0;
+    const char *cores_pattern = "/proc/device-tree/cpus/PowerPC,POWER*";
+    glob_t dtglob;
+
+    rc = glob(cores_pattern, GLOB_NOSORT, NULL, &dtglob);
+    if (rc) {
+        fprintf(stderr, "%s() glob(%s) returns %d, errno %d\n", __func__,
+                cores_pattern, rc, errno);
+        return -1;
+    }
+
+    num_cores = dtglob.gl_pathc;
+    globfree(&dtglob);
+
+    if (num_cores == 0)
+        return -1;
+
+    return num_cores;
+}
+
+int kvmppc_rtas_get_proc_module_info(uint16_t *mtypes, uint16_t *sockets, uint16_t *chips, uint16_t *cores)
+{
+    int _sockets = 0, _chips = 0, _cores = 0;
+
+    /* POWER systems only support 1 module type per system
+     * currently
+     */
+    mtypes[0] = 1;
+    if (kvmppc_count_sockets_chips_dt(&_sockets, &_chips))
+        return -1;
+    _cores = kvmppc_count_ppc_cores_dt();
+    if ( _cores  <= 0 )
+        return -1;
+
+    sockets[0] = _sockets;
+    chips[0] = _chips / _sockets;
+    cores[0] = _cores / _chips;    
+
+    return 0;
 }
