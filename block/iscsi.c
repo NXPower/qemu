@@ -96,6 +96,7 @@ typedef struct IscsiLun {
     bool dpofua;
     bool has_write_same;
     bool request_timed_out;
+    time_t fence_time;
 } IscsiLun;
 
 typedef struct IscsiTask {
@@ -131,8 +132,8 @@ typedef struct IscsiAIOCB {
 #define NOP_INTERVAL 5000
 #define MAX_NOP_FAILURES 3
 #define ISCSI_CMD_RETRIES ARRAY_SIZE(iscsi_retry_times)
+#define CONNECTION_TIMEOUT 60
 static const unsigned iscsi_retry_times[] = {8, 32, 128, 512, 2048, 8192, 32768};
-#define ISCSI_CONNECTION_TIMEOUT 45
 
 /* this threshold is a trade-off knob to choose between
  * the potential additional overhead of an extra GET_LBA_STATUS request
@@ -347,9 +348,17 @@ iscsi_set_events(IscsiLun *iscsilun)
 static void iscsi_timed_check_events(void *opaque)
 {
     IscsiLun *iscsilun = opaque;
+    time_t now = time(NULL);
 
     /* check for timed out requests */
     iscsi_service(iscsilun->iscsi, 0);
+
+    if (iscsi_get_nops_in_flight(iscsilun->iscsi) == 0) {
+        iscsilun->fence_time = now + CONNECTION_TIMEOUT;
+    } else if (now >= iscsilun->fence_time) {
+        error_report("iSCSI: connection timed out, committing suicide");
+        exit(1);
+    }
 
     if (iscsilun->request_timed_out) {
         iscsilun->request_timed_out = false;
@@ -1803,10 +1812,12 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
         ret = -ENOMEM;
         goto out;
     }
-    iscsi_set_connection_timeout(iscsi, ISCSI_CONNECTION_TIMEOUT);
 #if LIBISCSI_API_VERSION >= (20160603)
     if (iscsi_init_transport(iscsi, transport)) {
         error_setg(errp, ("Error initializing transport."));
+
+    if (iscsi_set_targetname(iscsi, iscsi_url->target)) {
+        error_setg(errp, "iSCSI: Failed to set target name.");
         ret = -EINVAL;
         goto out;
     }
@@ -1849,8 +1860,7 @@ static int iscsi_open(BlockDriverState *bs, QDict *options, int flags,
     }
 #endif
 
-    if (iscsi_full_connect_sync(iscsi, portal, lun,
-                                ISCSI_CONNECTION_TIMEOUT) != 0) {
+    if (iscsi_full_connect_sync(iscsi, portal, lun) != 0) {
         error_setg(errp, "iSCSI: Failed to connect to LUN : %s",
             iscsi_get_error(iscsi));
         ret = -EINVAL;
