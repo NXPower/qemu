@@ -579,6 +579,7 @@ target_ulong spapr_hypercall(PowerPCCPU *cpu, target_ulong opcode,
 /* RTAS ibm,get-system-parameter token values */
 #define RTAS_SYSPARM_SPLPAR_CHARACTERISTICS      20
 #define RTAS_SYSPARM_DIAGNOSTICS_RUN_MODE        42
+#define RTAS_SYSPARM_PROCESSOR_MODULE_INFO       43
 #define RTAS_SYSPARM_UUID                        48
 
 /* RTAS indicator/sensor types
@@ -765,6 +766,8 @@ int spapr_rng_populate_dt(void *fdt);
 #define SPAPR_LMB_FLAGS_ASSIGNED 0x00000008
 #define SPAPR_LMB_FLAGS_DRC_INVALID 0x00000020
 #define SPAPR_LMB_FLAGS_RESERVED 0x00000080
+
+#define SPAPR_MAX_MODULE_TYPES  1
 
 void spapr_do_system_reset_on_cpu(CPUState *cs, run_on_cpu_data arg);
 
