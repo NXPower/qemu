@@ -242,14 +242,21 @@ static void rtas_ibm_get_system_parameter(PowerPCCPU *cpu,
 
     switch (parameter) {
     case RTAS_SYSPARM_SPLPAR_CHARACTERISTICS: {
+        int virtcores_nr = smp_cpus / smp_threads;
+        int max_virtcores_nr = max_cpus / smp_threads;
+        int max_ent = max_virtcores_nr * 100;
+        int physical_cores_nr = kvmppc_count_ppc_cores_dt();
+        if (physical_cores_nr < 0) {
+            physical_cores_nr = max_virtcores_nr;
+        }
         char *param_val = g_strdup_printf("MaxEntCap=%d,"
                                           "DesMem=%llu,"
                                           "DesProcs=%d,"
                                           "MaxPlatProcs=%d",
-                                          max_cpus,
+                                          max_ent,
                                           current_machine->ram_size / M_BYTE,
-                                          smp_cpus,
-                                          max_cpus);
+                                          virtcores_nr,
+                                          physical_cores_nr);
         ret = sysparm_st(buffer, length, param_val, strlen(param_val) + 1);
         g_free(param_val);
         break;
