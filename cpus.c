@@ -75,8 +75,8 @@ int64_t max_advance;
 static unsigned int throttle_percentage;
 
 #define CPU_THROTTLE_PCT_MIN 1
-#define CPU_THROTTLE_PCT_MAX 99
-#define CPU_THROTTLE_TIMESLICE_NS 10000000
+#define CPU_THROTTLE_PCT_MAX 999
+#define CPU_THROTTLE_TIMESLICE_NS 1000000
 
 bool cpu_is_stopped(CPUState *cpu)
 {
@@ -558,7 +558,7 @@ static void cpu_throttle_thread(void *opaque)
         return;
     }
 
-    pct = (double)cpu_throttle_get_percentage() / 100;
+    pct = (double)cpu_throttle_get_percentage() / 1000;
     throttle_ratio = pct / (1 - pct);
     sleeptime_ns = (long)(throttle_ratio * CPU_THROTTLE_TIMESLICE_NS);
 
@@ -578,7 +578,7 @@ static void cpu_throttle_timer_tick(void *opaque)
     }
     async_run_on_cpu(cpu, cpu_throttle_thread, cpu);
 
-    pct = (double)cpu_throttle_get_percentage() / 100;
+    pct = (double)cpu_throttle_get_percentage() / 1000;
     timer_mod(cpu->throttle_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL_RT) +
                                    CPU_THROTTLE_TIMESLICE_NS / (1 - pct));
 }

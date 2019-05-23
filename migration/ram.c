@@ -650,13 +650,13 @@ static void migration_bitmap_sync(void)
                  * based on the current amount of throttle. Multiply it by the
                  * previous scaling to calculate the new throttle needed. */
                 req_mult *= req_mult_prev;
-                req_thr = (int)ceil(100.0 * (1.0 - req_mult));
-                if (req_thr == 100) {
-                    req_thr = 99;
+                req_thr = (int)ceil(1000.0 * (1.0 - req_mult));
+                if (req_thr == 1000) {
+                    req_thr = 999;
                 }
 
-                if ((req_thr == 99) && (retry_at_limit_cnt++ == 50)) {
-                    error_report("Not converging after 50 attempts at 99%%.");
+                if ((req_thr == 999) && (retry_at_limit_cnt++ == 50)) {
+                    error_report("Not converging after 50 attempts at 99.9%%.");
                     migrate_set_state(&s->state, s->state,
                                       MIGRATION_STATUS_FAILED);
                 } else {
