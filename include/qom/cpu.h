@@ -341,10 +341,10 @@ struct CPUState {
     uint32_t can_do_io;
     int32_t exception_index; /* used by m68k TCG */
 
-    /* Used to keep track of an outstanding cpu throttle thread for migration
+    /* Used to cyclically trigger vCPU throttling during VM migration
      * autoconverge
      */
-    bool throttle_thread_scheduled;
+    QEMUTimer *throttle_timer;
 
     /* Note that this is accessed at the start of every TB via a negative
        offset from AREG0.  Leave this field at the end so as to make the
